@@ -164,7 +164,7 @@ def write_vad_infer_manifest(file: dict, args_func: dict) -> list:
     except Exception as e:
         err_file = "error.log"
         with open(err_file, 'w', encoding='utf-8') as fout:
-            fout.write(file + ":" + str(e))
+            fout.write(filepath + ":" + str(e))
     return res
 
 
