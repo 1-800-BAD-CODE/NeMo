@@ -18,7 +18,7 @@ import numpy as np
 import torch.utils.data as pt_data
 from torch.utils.data import Dataset, IterableDataset
 
-__all__ = ['ConcatDataset', 'ConcatMapDataset']
+__all__ = ["ConcatDataset", "ConcatMapDataset"]
 
 
 class ConcatDataset(IterableDataset):
@@ -42,7 +42,7 @@ class ConcatDataset(IterableDataset):
         self,
         datasets: List[Any],
         shuffle: bool = True,
-        sampling_technique: str = 'temperature',
+        sampling_technique: str = "temperature",
         sampling_temperature: int = 5,
         sampling_probabilities: List[float] = None,
         global_rank: int = 0,
@@ -50,36 +50,36 @@ class ConcatDataset(IterableDataset):
     ):
         super().__init__()
 
-        supported_sampling_techniques = ['temperature', 'random', 'round-robin']
+        supported_sampling_techniques = ["temperature", "random", "round-robin"]
         self.datasets = datasets
         self.iterables = [None] * len(datasets)
         self.shuffle = shuffle
         self.global_rank = global_rank
         self.world_size = world_size
         self.sampling_kwargs = {}
-        if sampling_technique == 'temperature':
+        if sampling_technique == "temperature":
             self.index_generator = ConcatDataset.temperature_generator
-            self.sampling_kwargs['temperature'] = sampling_temperature
-        elif sampling_technique == 'random':
+            self.sampling_kwargs["temperature"] = sampling_temperature
+        elif sampling_technique == "random":
             self.index_generator = ConcatDataset.random_generator
-            self.sampling_kwargs['p'] = sampling_probabilities
-        elif sampling_technique == 'round-robin':
+            self.sampling_kwargs["p"] = sampling_probabilities
+        elif sampling_technique == "round-robin":
             self.index_generator = ConcatDataset.round_robin_generator
         else:
             raise ValueError(f"Currently we only support sampling techniques in {supported_sampling_techniques}.")
         self.length = 0
 
         if isinstance(datasets[0], IterableDataset):
-            self.kind = 'iterable'
+            self.kind = "iterable"
         else:
-            self.kind = 'map'
+            self.kind = "map"
 
         for idx, dataset in enumerate(datasets):
             isiterable = isinstance(dataset, IterableDataset)
-            if (isiterable and not self.kind == 'iterable') or (not isiterable and self.kind == 'iterable'):
+            if (isiterable and not self.kind == "iterable") or (not isiterable and self.kind == "iterable"):
                 raise ValueError("All datasets in ConcatDataset must be of the same kind (Iterable or Map).")
 
-            if self.kind == 'map':
+            if self.kind == "map":
                 self.length += len(dataset) // world_size
             else:
                 self.length += len(dataset)
@@ -104,7 +104,7 @@ class ConcatDataset(IterableDataset):
             wnum = worker_info.num_workers
             max_elements = len(range(wid, self.length, wnum))
 
-        if self.kind == 'map':
+        if self.kind == "map":
             for idx in range(len(self.datasets)):
                 start_idx = (len(self.datasets[idx]) // self.world_size) * self.global_rank
                 end_idx = start_idx + (len(self.datasets[idx]) // self.world_size)
@@ -127,7 +127,7 @@ class ConcatDataset(IterableDataset):
                 return
             try:
                 val = next(self.iterables[ind])
-                if self.kind == 'map':
+                if self.kind == "map":
                     val = self.datasets[ind][val]
                 yield val
             except StopIteration:
@@ -139,7 +139,7 @@ class ConcatDataset(IterableDataset):
 
     @staticmethod
     def temperature_generator(datasets, **kwargs):
-        temp = kwargs.get('temperature')
+        temp = kwargs.get("temperature")
         if not temp:
             raise ValueError("Temperature generator expects a 'temperature' keyword argument.")
 
@@ -165,7 +165,7 @@ class ConcatDataset(IterableDataset):
 
     @staticmethod
     def random_generator(datasets, **kwargs):
-        p = kwargs.get('p')
+        p = kwargs.get("p")
         if not p:
             raise ValueError("Random generator expects a 'p' keyowrd argument for sampling probabilities.")
 
@@ -195,7 +195,7 @@ class ConcatMapDataset(Dataset):
     def __init__(
         self,
         datasets: List[Any],
-        sampling_technique: str = 'temperature',
+        sampling_technique: str = "temperature",
         sampling_temperature: int = 5,
         sampling_probabilities: Optional[List[float]] = None,
         seed: Optional[int] = None,
@@ -248,9 +248,15 @@ class ConcatMapDataset(Dataset):
             choices = np.arange(len(self.datasets))
             # Keep going until largest dataset is exhausted.
             exhausted_datasets = set()
+            choice_idx = 0
+            choice_queue = self.np_rng.choice(a=choices, p=p, size=1000)
             while len(exhausted_datasets) < len(self.datasets):
                 # Randomly choose a dataset for each position in accordance with p
-                dataset_id = self.np_rng.choice(a=choices, p=p)
+                dataset_id = choice_queue[choice_idx]
+                choice_idx += 1
+                if choice_idx == len(choice_queue):
+                    choice_queue = self.np_rng.choice(a=choices, p=p, size=1000)
+                    choice_idx = 0
                 dataset = self.datasets[dataset_id]
                 # Pick next index from dataset
                 position = dataset_positions[dataset_id]
