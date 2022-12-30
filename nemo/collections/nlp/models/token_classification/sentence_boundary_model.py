@@ -63,7 +63,7 @@ class SentenceBoundaryDetectionModel(NLPModel):
     @property
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
         return {
-            "logits": NeuralType(("B", "T"), LogitsType()),
+            "logits": NeuralType(("B", "T", "D"), LogitsType()),
         }
 
     @classmethod
@@ -148,14 +148,14 @@ class SentenceBoundaryDetectionModel(NLPModel):
             module_list.append(metrics)
         return module_list
 
-    @typecheck
+    @typecheck()
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         mask = input_ids.ne(self.tokenizer.pad_id)
-        # Encoded output is [B, T, D]
+        # [B, T] -> [B, T, D]
         encoded = self.bert_model(input_ids=input_ids, attention_mask=mask, token_type_ids=None)
         if isinstance(encoded, tuple):
             encoded = encoded[0]
-        # [B, T, C]
+        # [B, T, D] -> [B, T, C]
         logits = self._decoder(hidden_states=encoded)
         return logits
 
