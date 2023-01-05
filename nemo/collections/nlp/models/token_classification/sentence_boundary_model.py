@@ -66,6 +66,15 @@ class SentenceBoundaryDetectionModel(NLPModel):
             "logits": NeuralType(("B", "T", "D"), LogitsType()),
         }
 
+    def input_example(
+        self, min_batch_size: int = 2, max_batch_size: int = 8, min_seq_length: int = 5, max_seq_length: int = 16
+    ):
+        p = next(self.parameters())
+        batch_size = torch.randint(low=min_batch_size, high=max_batch_size, size=[1]).item()
+        seq_length = torch.randint(low=min_seq_length, high=max_seq_length, size=[1]).item()
+        input_ids = torch.randint(low=0, high=self.tokenizer.vocab_size, size=[batch_size, seq_length], device=p.device)
+        return input_ids
+
     @classmethod
     def list_available_models(cls) -> Optional[List[PretrainedModelInfo]]:
         return None
@@ -148,6 +157,14 @@ class SentenceBoundaryDetectionModel(NLPModel):
             module_list.append(metrics)
         return module_list
 
+    @property
+    def output_names(self):
+        return ["probs"]
+
+    @property
+    def input_module(self):
+        return self
+
     @typecheck()
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         mask = input_ids.ne(self.tokenizer.pad_id)
@@ -158,6 +175,18 @@ class SentenceBoundaryDetectionModel(NLPModel):
         # [B, T, D] -> [B, T, C]
         logits = self._decoder(hidden_states=encoded)
         return logits
+
+    def forward_for_export(self, input_ids: torch.Tensor) -> torch.Tensor:
+        mask = input_ids.ne(self.tokenizer.pad_id)
+        # [B, T] -> [B, T, D]
+        encoded = self.bert_model(input_ids=input_ids, attention_mask=mask, token_type_ids=None)
+        if isinstance(encoded, tuple):
+            encoded = encoded[0]
+        # [B, T, D] -> [B, T, C]
+        logits = self._decoder(hidden_states=encoded)
+        probs = logits.softmax(-1)
+        probs = probs[..., 1]
+        return probs
 
     def training_step(self, batch, batch_idx: int):
         input_ids, targets, lengths = batch
