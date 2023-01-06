@@ -1,5 +1,5 @@
 
-name: test_sbd
+name: sbd_small_49lang_opensub
 
 model:
   ignore_idx: -100
@@ -24,7 +24,7 @@ model:
 
   tokenizer:
     tokenizer_name: sentencepiece
-    tokenizer_model: /home/ubuntu/spe/spe_mixed_case_64k_49lang.model
+    tokenizer_model: /home/ubuntu/processed/spe_mixed_case_64k_49lang.model
     vocab_file: null
     special_tokens:
       bos_token: "<s>"
@@ -48,24 +48,50 @@ model:
       p_lowercase: 0.5
       max_input_lines: 1000000
     data:
+      af:
+        text_files: "/home/ubuntu/processed/af.train.txt"
       ar:
         text_files: "/home/ubuntu/processed/ar.train.txt"
+      bg:
+        text_files: "/home/ubuntu/processed/bg.train.txt"
       bn:
         text_files: "/home/ubuntu/processed/bn.train.txt"
+      bs:
+        text_files: "/home/ubuntu/processed/bs.train.txt"
+      ca:
+        text_files: "/home/ubuntu/processed/ca.train.txt"
+      cs:
+        text_files: "/home/ubuntu/processed/cs.train.txt"
+      da:
+        text_files: "/home/ubuntu/processed/da.train.txt"
       de:
         text_files: "/home/ubuntu/processed/de.train.txt"
+      el:
+        text_files: "/home/ubuntu/processed/el.train.txt"
       en:
         text_files: "/home/ubuntu/processed/en.train.txt"
+      eo:
+        text_files: "/home/ubuntu/processed/eo.train.txt"
       es:
         text_files: "/home/ubuntu/processed/es.train.txt"
       et:
         text_files: "/home/ubuntu/processed/et.train.txt"
+      eu:
+        text_files: "/home/ubuntu/processed/eu.train.txt"
       fi:
         text_files: "/home/ubuntu/processed/fi.train.txt"
       fr:
         text_files: "/home/ubuntu/processed/fr.train.txt"
+      gl:
+        text_files: "/home/ubuntu/processed/gl.train.txt"
+      he:
+        text_files: "/home/ubuntu/processed/he.train.txt"
       hi:
         text_files: "/home/ubuntu/processed/hi.train.txt"
+      hr:
+        text_files: "/home/ubuntu/processed/hr.train.txt"
+      hu:
+        text_files: "/home/ubuntu/processed/hu.train.txt"
       id:
         text_files: "/home/ubuntu/processed/id.train.txt"
       is:
@@ -75,12 +101,20 @@ model:
       ja:
         text_files: "/home/ubuntu/processed/ja.train.txt"
         continuous_script: true
+      ka:
+        text_files: "/home/ubuntu/processed/ka.train.txt"
       ko:
         text_files: "/home/ubuntu/processed/ko.train.txt"
       lt:
         text_files: "/home/ubuntu/processed/lt.train.txt"
       lv:
         text_files: "/home/ubuntu/processed/lv.train.txt"
+      mk:
+        text_files: "/home/ubuntu/processed/mk.train.txt"
+      ml:
+        text_files: "/home/ubuntu/processed/ml.train.txt"
+      ms:
+        text_files: "/home/ubuntu/processed/ms.train.txt"
       nl:
         text_files: "/home/ubuntu/processed/nl.train.txt"
       'no':
@@ -89,14 +123,28 @@ model:
         text_files: "/home/ubuntu/processed/pl.train.txt"
       pt:
         text_files: "/home/ubuntu/processed/pt.train.txt"
+      ro:
+        text_files: "/home/ubuntu/processed/ro.train.txt"
       ru:
         text_files: "/home/ubuntu/processed/ru.train.txt"
+      si:
+        text_files: "/home/ubuntu/processed/si.train.txt"
+      sk:
+        text_files: "/home/ubuntu/processed/sk.train.txt"
+      sl:
+        text_files: "/home/ubuntu/processed/sl.train.txt"
+      sq:
+        text_files: "/home/ubuntu/processed/sq.train.txt"
       sv:
         text_files: "/home/ubuntu/processed/sv.train.txt"
+      th:
+        text_files: "/home/ubuntu/processed/th.train.txt"
       tr:
         text_files: "/home/ubuntu/processed/tr.train.txt"
       uk:
         text_files: "/home/ubuntu/processed/uk.train.txt"
+      vi:
+        text_files: "/home/ubuntu/processed/vi.train.txt"
       zh:
         text_files: "/home/ubuntu/processed/zh.train.txt"
         continuous_script: true
@@ -111,41 +159,74 @@ model:
       target_pad_id: -100
       seed: 12345
       p_lowercase: 0.5
-#      max_input_lines: 400
     data:
+      af:
+        text_files: "/home/ubuntu/processed/af.dev.txt"
       ar:
         text_files: "/home/ubuntu/processed/ar.dev.txt"
+      bg:
+        text_files: "/home/ubuntu/processed/bg.dev.txt"
       bn:
         text_files: "/home/ubuntu/processed/bn.dev.txt"
+      bs:
+        text_files: "/home/ubuntu/processed/bs.dev.txt"
+      ca:
+        text_files: "/home/ubuntu/processed/ca.dev.txt"
+      cs:
+        text_files: "/home/ubuntu/processed/cs.dev.txt"
+      da:
+        text_files: "/home/ubuntu/processed/da.dev.txt"
       de:
         text_files: "/home/ubuntu/processed/de.dev.txt"
+      el:
+        text_files: "/home/ubuntu/processed/el.dev.txt"
       en:
         text_files: "/home/ubuntu/processed/en.dev.txt"
+      eo:
+        text_files: "/home/ubuntu/processed/eo.dev.txt"
       es:
         text_files: "/home/ubuntu/processed/es.dev.txt"
       et:
         text_files: "/home/ubuntu/processed/et.dev.txt"
+      eu:
+        text_files: "/home/ubuntu/processed/eu.dev.txt"
       fi:
         text_files: "/home/ubuntu/processed/fi.dev.txt"
       fr:
         text_files: "/home/ubuntu/processed/fr.dev.txt"
+      gl:
+        text_files: "/home/ubuntu/processed/gl.dev.txt"
+      he:
+        text_files: "/home/ubuntu/processed/he.dev.txt"
       hi:
         text_files: "/home/ubuntu/processed/hi.dev.txt"
+      hr:
+        text_files: "/home/ubuntu/processed/hr.dev.txt"
+      hu:
+        text_files: "/home/ubuntu/processed/hu.dev.txt"
       id:
         text_files: "/home/ubuntu/processed/id.dev.txt"
-      it:
-        text_files: "/home/ubuntu/processed/it.dev.txt"
       is:
         text_files: "/home/ubuntu/processed/is.dev.txt"
+      it:
+        text_files: "/home/ubuntu/processed/it.dev.txt"
       ja:
         text_files: "/home/ubuntu/processed/ja.dev.txt"
         continuous_script: true
+      ka:
+        text_files: "/home/ubuntu/processed/ka.dev.txt"
       ko:
         text_files: "/home/ubuntu/processed/ko.dev.txt"
       lt:
         text_files: "/home/ubuntu/processed/lt.dev.txt"
       lv:
         text_files: "/home/ubuntu/processed/lv.dev.txt"
+      mk:
+        text_files: "/home/ubuntu/processed/mk.dev.txt"
+      ml:
+        text_files: "/home/ubuntu/processed/ml.dev.txt"
+      ms:
+        text_files: "/home/ubuntu/processed/ms.dev.txt"
       nl:
         text_files: "/home/ubuntu/processed/nl.dev.txt"
       'no':
@@ -154,14 +235,28 @@ model:
         text_files: "/home/ubuntu/processed/pl.dev.txt"
       pt:
         text_files: "/home/ubuntu/processed/pt.dev.txt"
+      ro:
+        text_files: "/home/ubuntu/processed/ro.dev.txt"
       ru:
         text_files: "/home/ubuntu/processed/ru.dev.txt"
+      si:
+        text_files: "/home/ubuntu/processed/si.dev.txt"
+      sk:
+        text_files: "/home/ubuntu/processed/sk.dev.txt"
+      sl:
+        text_files: "/home/ubuntu/processed/sl.dev.txt"
+      sq:
+        text_files: "/home/ubuntu/processed/sq.dev.txt"
       sv:
         text_files: "/home/ubuntu/processed/sv.dev.txt"
+      th:
+        text_files: "/home/ubuntu/processed/th.dev.txt"
       tr:
         text_files: "/home/ubuntu/processed/tr.dev.txt"
       uk:
         text_files: "/home/ubuntu/processed/uk.dev.txt"
+      vi:
+        text_files: "/home/ubuntu/processed/vi.dev.txt"
       zh:
         text_files: "/home/ubuntu/processed/zh.dev.txt"
         continuous_script: true
@@ -180,7 +275,7 @@ model:
 trainer:
   devices: -1 # the number of gpus, 0 for CPU
   num_nodes: 1
-  max_steps: 500000 # precedence over max_epochs
+  max_steps: 300000 # precedence over max_epochs
   accumulate_grad_batches: 1 # accumulates grads every k batches
   gradient_clip_val: 0.0
   precision: 16 # Should be set to 16 for O1 and O2, default is 16 as PT ignores it when am_level is O0
