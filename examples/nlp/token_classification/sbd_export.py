@@ -8,7 +8,6 @@ def get_args() -> argparse.Namespace:
         description="Exports a model", formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument("model_path", help="Path to a .nemo model")
-    parser.add_argument("spe_model", help="Path to an SPE model")
     parser.add_argument("output_path", help="Path to the output file. Extension .jit or .onnx to specify IR format.")
 
     args = parser.parse_args()
