@@ -37,5 +37,6 @@ from nemo.collections.nlp.models.token_classification import (
     PunctuationCapitalizationLexicalAudioModel,
     PunctuationCapitalizationModel,
     TokenClassificationModel,
+    PunctCapSegModel,
 )
 from nemo.collections.nlp.models.zero_shot_intent_recognition import ZeroShotIntentModel
