@@ -132,6 +132,7 @@ class PunctCapSegDataset(Dataset):
         tokenizer: Optional[TokenizerSpec] = None,
         target_pad_value: int = -100,
         rng_seed: Optional[int] = None,
+        max_subtoken_length: Optional[int] = None,
     ) -> None:
         super().__init__()
         self._language = language
@@ -140,7 +141,7 @@ class PunctCapSegDataset(Dataset):
         self._is_continuous = is_continuous if (is_continuous is not None) else (language in {"zh", "ja", "my"})
         self._rng_seed = rng_seed
         self._rng = np.random.default_rng(seed=self._rng_seed)
-        self._max_token_len = 0
+        self._max_token_len = max_subtoken_length
         # Call setter
         self.tokenizer = tokenizer
 
@@ -153,13 +154,14 @@ class PunctCapSegDataset(Dataset):
         self._tokenizer = tokenizer
         if tokenizer is not None:
             self._using_sp = isinstance(self._tokenizer, SentencePieceTokenizer)
-            if not self._using_sp:
-                # Should skip special tokens, but in most cases they are shorter than longest tokens anyway
-                self._max_token_len = max(len(x) for x in self.tokenizer.vocab)
-            else:
-                # SentencePiece model - AutoTokenizer doesn't have 'vocab' attr for some SP models
-                vocab_size = tokenizer.vocab_size
-                self._max_token_len = max(len(self.tokenizer.ids_to_tokens([idx])[0]) for idx in range(vocab_size))
+            if self._max_token_len is None:
+                if not self._using_sp:
+                    # Should skip special tokens, but in most cases they are shorter than longest tokens anyway
+                    self._max_token_len = max(len(x) for x in self.tokenizer.vocab)
+                else:
+                    # SentencePiece model - AutoTokenizer doesn't have 'vocab' attr for some SP models
+                    vocab_size = tokenizer.vocab_size
+                    self._max_token_len = max(len(self.tokenizer.ids_to_tokens([idx])[0]) for idx in range(vocab_size))
 
     @property
     def language(self) -> str:
@@ -511,16 +513,6 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         # Randomly select additional indices to use
         indices_to_use = [idx] + extra_indices
         punctuated_texts: List[str] = [self._data[x] for x in indices_to_use]
-        # print(f"Raw texts:")
-        # for x in punctuated_texts:
-        #     print(f"\t{x}")
-
-        # # Always pass inputs through an encode-decode cycle with tokenizer???
-        # for i in range(len(punctuated_texts)):
-        #     text = punctuated_texts[i]
-        #     ids = self.tokenizer.text_to_ids(text)
-        #     text = self.tokenizer.ids_to_text(ids)
-        #     punctuated_texts[i] = text
 
         unpunctuated_texts = []
         punct_pre_target_indices = []
@@ -540,13 +532,6 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         # Generate tokens
         input_tokens = self.tokenizer.text_to_tokens(uncased_text)
 
-        # print(f"{concat_unpunct_text=}")
-        # print(f"{uncased_text=}")
-        # print(f"{input_tokens=}")
-        # print(f"{len(punct_post_target_indices)=}")
-        # print(f"{punct_post_target_indices=}")
-        # print(f"{punct_pre_target_indices=}")
-
         # Figure out which characters are the sentence boundaries
         boundary_char_indices: List[int] = []
         for text in unpunctuated_texts:
@@ -554,7 +539,6 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
             # Subsequent boundaries are in addition to previous
             boundary = num_chars_in_text + (0 if not boundary_char_indices else boundary_char_indices[-1])
             boundary_char_indices.append(boundary)
-        # print(f"{boundary_char_indices=}")
         char_position = 0
         seg_targets = []
         for token in input_tokens:
@@ -566,7 +550,6 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
                 skip = 2
             chars_in_token = len(token) - skip
             char_position += chars_in_token
-            # print(f"{token=} {char_position=}")
             # If this token contains the next boundary char, it's a target.
             if boundary_char_indices and char_position >= boundary_char_indices[0]:
                 seg_targets.append(1)

@@ -15,7 +15,7 @@ model:
   log_metrics_for:
     - en
 
-  max_length: 256
+  max_length: 128
 
   tokenizer:
     tokenizer_name: sentencepiece
@@ -43,7 +43,7 @@ model:
       hidden_act: gelu
       hidden_dropout_prob: 0.1
       attention_probs_dropout_prob: 0.1
-      max_position_embeddings: 256
+      max_position_embeddings: 128
       type_vocab_size: 1
 
   decoder:
@@ -99,8 +99,8 @@ model:
   pad_value: -100
 
   train_ds:
-    batch_size: 128
-    num_workers: 6
+    batch_size: 512
+    num_workers: 12
     # A list of datasets will be used to create a ConcatMapDataset.
     sampling_technique: "temperature"
     sampling_temperature: 5
@@ -109,10 +109,11 @@ model:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
       min_lines_per_eg: 2
-      max_lines_per_eg: 8
+      max_lines_per_eg: 6
       max_length: ${model.max_length}
       truncate_max_tokens: 0
       max_input_lines: null
+      max_subtoken_length: 16
     # Typically, set up one data set per language.
     datasets:
       #      "af", "am", "ar", "bg", "bn", "de", "el", "en", "es", "et",
@@ -265,18 +266,19 @@ model:
         is_continuous: true
 
   validation_ds:
-    batch_size: 128
+    batch_size: 256
     num_workers: 0
     # "common" options are analogous to train_ds
     common:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
       min_lines_per_eg: 2
-      max_lines_per_eg: 8
+      max_lines_per_eg: 6
       max_length: ${model.max_length}
       truncate_max_tokens: 0
       rng_seed: 12345
       max_input_lines: null
+      max_subtoken_length: 16
     datasets:
       #      "af", "am", "ar", "bg", "bn", "de", "el", "en", "es", "et",
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
@@ -435,21 +437,21 @@ model:
       min_lr: 1e-6
       last_epoch: -1
       warmup_ratio: null
-      warmup_steps: 16000
+      warmup_steps: 4000
 
 trainer:
   devices: -1
   num_nodes: 1
   max_epochs: -1
-  max_steps: 300000
+  max_steps: 150000
   accumulate_grad_batches: 1
-  gradient_clip_val: 2.0
+  # gradient_clip_val: 2.0
   precision: 16
   accelerator: auto
   strategy: dp
-  num_sanity_val_steps: 0
-  log_every_n_steps:  250  # Interval of logging.
-  val_check_interval: 10000  # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
+  num_sanity_val_steps: 2
+  log_every_n_steps:  100  # Interval of logging.
+  val_check_interval: 4000  # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
   resume_from_checkpoint: null
   logger: false
   enable_checkpointing: false
