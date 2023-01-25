@@ -43,7 +43,7 @@ class InferencePunctCapSegDataset(Dataset):
             self._data = input_texts
         else:
             self._data = []
-            with open(input_file) as f:
+            with open(input_file) as f:  # noqa
                 for line in f:
                     self._data.append(line.strip())
         logging.info(f"Inference dataset instantiated with {len(self._data)} lines of text.")
@@ -69,8 +69,8 @@ class InferencePunctCapSegDataset(Dataset):
         out_batch_ids: List[int] = []
         out_input_ids: List[List[int]] = []
         out_lengths: List[int] = []
-        bos = self._tokenizer.bos_id
-        eos = self._tokenizer.eos_id
+        bos = self._tokenizer.bos_id  # noqa
+        eos = self._tokenizer.eos_id  # noqa
         for batch_idx, next_input_ids in enumerate(input_ids):
             start = 0
             while True:
@@ -86,7 +86,7 @@ class InferencePunctCapSegDataset(Dataset):
         batch_ids = torch.tensor(out_batch_ids)
         lengths = torch.tensor(out_lengths)
         ids_tensor = torch.full(
-            size=[lengths.shape[0], lengths.max()], dtype=torch.long, fill_value=self._tokenizer.pad_id
+            size=[lengths.shape[0], lengths.max()], dtype=torch.long, fill_value=self._tokenizer.pad_id  # noqa
         )
         for i, ids in enumerate(out_input_ids):
             ids_tensor[i, : len(ids)] = torch.tensor(ids)
@@ -157,10 +157,10 @@ class PunctCapSegDataset(Dataset):
             if self._max_token_len is None:
                 if not self._using_sp:
                     # Should skip special tokens, but in most cases they are shorter than longest tokens anyway
-                    self._max_token_len = max(len(x) for x in self.tokenizer.vocab)
+                    self._max_token_len = max(len(x) for x in self.tokenizer.vocab)  # noqa
                 else:
                     # SentencePiece model - AutoTokenizer doesn't have 'vocab' attr for some SP models
-                    vocab_size = tokenizer.vocab_size
+                    vocab_size = tokenizer.vocab_size  # noqa
                     self._max_token_len = max(len(self.tokenizer.ids_to_tokens([idx])[0]) for idx in range(vocab_size))
 
     @property
@@ -180,14 +180,14 @@ class PunctCapSegDataset(Dataset):
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
         return {
             "input_ids": NeuralType(("B", "T"), ChannelType()),
-            "punc_pre_target_ids": NeuralType(("B", "T", "D"), LabelsType()),  # D == max_subtoken_len
+            "punc_pre_target_ids": NeuralType(("B", "T",), LabelsType()),  # D == num_pre_punct_tokens
             "punc_post_target_ids": NeuralType(("B", "T", "D"), LabelsType()),  # D == max_subtoken_len
             "cap_target_ids": NeuralType(("B", "T", "D"), LabelsType()),  # D == max_subtoken_len
             "seg_target_ids": NeuralType(("B", "T"), LabelsType()),
             "lengths": NeuralType(("B",), LengthsType()),
         }
 
-    def _fold_indices_to_targets(self, tokens: List[str], target_indices: List[int]) -> List[List[int]]:
+    def _fold_char_targets(self, tokens: List[str], char_level_targets: List[int]) -> List[List[int]]:
         all_targets: List[List[int]] = []
         # For each token, make one output list
         char_index = 0
@@ -200,10 +200,27 @@ class PunctCapSegDataset(Dataset):
             elif token.startswith("##"):
                 start = 2
             for i in range(start, len(token)):
-                char_target = target_indices[char_index]
+                char_target = char_level_targets[char_index]
                 token_targets[i] = char_target
                 char_index += 1
             all_targets.append(token_targets)
+        return all_targets
+
+    def _select_pre_punct_token_targets(self, tokens: List[str], char_level_targets: List[int]) -> List[int]:
+        all_targets: List[int] = []
+        # For each token, make one output list
+        char_index = 0
+        for token in tokens:
+            # Keep only the target for the first character of this subword
+            all_targets.append(char_level_targets[char_index])
+            # Fast-forward to skip the rest of this tokens characters
+            num_chars_in_token = len(token)
+            if self._using_sp:
+                if token.startswith("▁"):
+                    num_chars_in_token -= 1
+            elif token.startswith("##"):
+                num_chars_in_token -= 2
+            char_index += num_chars_in_token
         return all_targets
 
     @typecheck()
@@ -217,14 +234,12 @@ class PunctCapSegDataset(Dataset):
         batch_size = len(inputs)  # should be all the same size
 
         # Create empty input ID tensors and fill non-padded regions
-        input_ids = torch.full(size=(batch_size, lengths.max()), fill_value=self._tokenizer.pad_id)
+        input_ids = torch.full(size=(batch_size, lengths.max()), fill_value=self._tokenizer.pad_id)  # noqa
         for i in range(batch_size):
             input_ids[i, : lengths[i]] = inputs[i]
 
         # Create empty target tensors and fill non-padded regions
-        punct_pre_targets = torch.full(
-            size=[batch_size, lengths.max(), self._max_token_len], fill_value=self._target_pad_value
-        )
+        punct_pre_targets = torch.full(size=[batch_size, lengths.max()], fill_value=self._target_pad_value)
         punct_post_targets = torch.full(
             size=[batch_size, lengths.max(), self._max_token_len], fill_value=self._target_pad_value
         )
@@ -236,7 +251,7 @@ class PunctCapSegDataset(Dataset):
             cap_targets[i, : lengths[i], :] = cap_targets_list[i]
             seg_targets[i, : lengths[i]] = seg_targets_list[i]
             punct_post_targets[i, : lengths[i], :] = punct_post_targets_list[i]
-            punct_pre_targets[i, : lengths[i], :] = punct_pre_targets_list[i]
+            punct_pre_targets[i, : lengths[i]] = punct_pre_targets_list[i]
 
         return input_ids, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, lengths
 
@@ -502,8 +517,8 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
 
     def __getitem__(self, idx):
         # Each sequence starts with BOS and targets ignore first index
-        bos = self._tokenizer.bos_id
-        eos = self._tokenizer.eos_id
+        bos = self._tokenizer.bos_id  # noqa
+        eos = self._tokenizer.eos_id  # noqa
         pad = self._target_pad_value
         pad_list = [[pad] * self._max_token_len]
 
@@ -559,7 +574,7 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
 
         # Finalize the truecase/sentence boundary inputs and targets
         # Fold true-case targets into subword-based
-        cap_targets = self._fold_indices_to_targets(input_tokens, cap_target_indices)
+        cap_targets = self._fold_char_targets(input_tokens, cap_target_indices)
         # Trim if too long
         input_ids = self.tokenizer.tokens_to_ids(input_tokens)
         if len(input_ids) + 2 > self._max_length:
@@ -574,9 +589,9 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         seg_targets = [pad] + seg_targets + [pad]
         cap_targets = pad_list + cap_targets + pad_list
 
-        punct_pre_targets = self._fold_indices_to_targets(input_tokens, punct_pre_target_indices)
-        punct_post_targets = self._fold_indices_to_targets(input_tokens, punct_post_target_indices)
-        punct_pre_targets = pad_list + punct_pre_targets + pad_list
+        punct_pre_targets = self._select_pre_punct_token_targets(input_tokens, punct_pre_target_indices)
+        punct_pre_targets = [pad] + punct_pre_targets + [pad]
+        punct_post_targets = self._fold_char_targets(input_tokens, punct_post_target_indices)
         punct_post_targets = pad_list + punct_post_targets + pad_list
 
         # Convert to Tensors.

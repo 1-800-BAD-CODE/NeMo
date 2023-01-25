@@ -24,7 +24,7 @@ class PunctCapSegDecoder(NeuralModule):
     @property
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
         return {
-            "punct_pre_logits": NeuralType(("B", "T", "D", "C"), LogitsType()),  # D == max_subword_length
+            "punct_pre_logits": NeuralType(("B", "T", "C"), LogitsType()),
             "punct_post_logits": NeuralType(("B", "T", "D", "C"), LogitsType()),  # D == max_subword_length
             "cap_logits": NeuralType(("B", "T", "D"), LogitsType()),  # D == max_subword_length
             "seg_logits": NeuralType(("B", "T", "C"), LogitsType()),  # C == 2
@@ -51,9 +51,85 @@ class PunctCapSegDecoder(NeuralModule):
         pass
 
 
+class LinearPunctCapSegDecoder(PunctCapSegDecoder):
+    """
+
+
+    """
+
+    def __init__(
+        self,
+        encoder_dim: int,
+        punct_num_classes_post: int,
+        punct_num_classes_pre: int,
+        max_subword_length: int,
+        punct_head_n_layers: int = 1,
+        punct_head_dropout: float = 0.1,
+        cap_head_n_layers: int = 1,
+        cap_head_dropout: float = 0.1,
+        seg_head_n_layers: int = 1,
+        seg_head_dropout: float = 0.1,
+    ):
+        super().__init__()
+        self._max_subword_len = max_subword_length
+        self._num_post_punct_classes = punct_num_classes_post
+        self._num_pre_punct_classes = punct_num_classes_pre
+        self._punct_head_post: TokenClassifier = TokenClassifier(
+            hidden_size=encoder_dim,
+            num_layers=punct_head_n_layers,
+            dropout=punct_head_dropout,
+            activation="relu",
+            log_softmax=False,
+            num_classes=punct_num_classes_post * max_subword_length,
+        )
+        # "Pre" punctuation is only predicted once per subtoken, because in practice it only appears in Spanish before
+        # a complete token.
+        self._punct_head_pre: TokenClassifier = TokenClassifier(
+            hidden_size=encoder_dim,
+            num_layers=punct_head_n_layers,
+            dropout=punct_head_dropout,
+            activation="relu",
+            log_softmax=False,
+            num_classes=punct_num_classes_pre,
+        )
+        self._seg_head: TokenClassifier = TokenClassifier(
+            hidden_size=encoder_dim,
+            num_layers=seg_head_n_layers,
+            dropout=seg_head_dropout,
+            activation="relu",
+            log_softmax=False,
+            num_classes=2,
+        )
+        self._cap_head: TokenClassifier = TokenClassifier(
+            hidden_size=encoder_dim,
+            num_layers=cap_head_n_layers,
+            dropout=cap_head_dropout,
+            activation="relu",
+            log_softmax=False,
+            num_classes=max_subword_length,
+        )
+
+    @typecheck()
+    def forward(self, encoded: torch.Tensor, mask: torch.Tensor):
+        # [B, T, num_post_punct * max_token_len]
+        punct_logits_post = self._punct_head_post(hidden_states=encoded)
+        # [B, T, num_pre_punct]
+        punct_logits_pre = self._punct_head_pre(hidden_states=encoded)
+        # [B, T, max_subword_len]
+        cap_logits = self._cap_head(hidden_states=encoded)
+        # [B, T, 2]
+        seg_logits = self._seg_head(hidden_states=encoded)
+
+        # Unfold the logits to match the targets: [B, T, max_subword_len * C] -> [B, T, max_subword_len, C]
+        punct_logits_post = punct_logits_post.view([*punct_logits_post.shape[:-1], -1, self._num_post_punct_classes])
+
+        return punct_logits_pre, punct_logits_post, cap_logits, seg_logits
+
+
 class MHAPunctCapSegDecoder(PunctCapSegDecoder):
     """
-    
+    FIXME when projecting the encoded tensor, padding for ignored character positions is not accounted for. Encoder
+        produces junk in these regions and the embeddings are effectively ignored.
 
     """
 

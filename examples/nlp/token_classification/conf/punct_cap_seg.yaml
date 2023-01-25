@@ -47,16 +47,11 @@ model:
       type_vocab_size: 1
 
   decoder:
-    _target_: nemo.collections.nlp.modules.token_classification.MHAPunctCapSegDecoder
+    _target_: nemo.collections.nlp.modules.token_classification.LinearPunctCapSegDecoder
     punct_num_classes_post: null  # will get set by model
     punct_num_classes_pre: null  # will get set by model
     max_subword_length: null  # will get set by model
     encoder_dim: ${model.language_model.config.hidden_size}
-    punct_emb_dim: 4
-    transformer_inner_size: 1024
-    transformer_num_heads: 4
-    transformer_num_layers: 2
-    transformer_ffn_dropout: 0.1
     cap_head_dropout: 0.1
     punct_head_dropout: 0.1
     seg_head_dropout: 0.1
@@ -108,12 +103,11 @@ model:
     common:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
-      min_lines_per_eg: 2
-      max_lines_per_eg: 6
+      min_lines_per_eg: 1
+      max_lines_per_eg: 5
       max_length: ${model.max_length}
       truncate_max_tokens: 0
       max_input_lines: null
-      max_subtoken_length: 16
     # Typically, set up one data set per language.
     datasets:
       #      "af", "am", "ar", "bg", "bn", "de", "el", "en", "es", "et",
@@ -267,18 +261,17 @@ model:
 
   validation_ds:
     batch_size: 256
-    num_workers: 0
+    num_workers: 4
     # "common" options are analogous to train_ds
     common:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
-      min_lines_per_eg: 2
-      max_lines_per_eg: 6
+      min_lines_per_eg: 1
+      max_lines_per_eg: 5
       max_length: ${model.max_length}
       truncate_max_tokens: 0
       rng_seed: 12345
       max_input_lines: null
-      max_subtoken_length: 16
     datasets:
       #      "af", "am", "ar", "bg", "bn", "de", "el", "en", "es", "et",
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset

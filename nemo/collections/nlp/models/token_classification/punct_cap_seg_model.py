@@ -55,16 +55,19 @@ class PunctCapSegModel(NLPModel):
             vocab_size = self.tokenizer.vocab_size
             self._max_token_len = max(len(self.tokenizer.ids_to_tokens([idx])[0]) for idx in range(vocab_size))
 
-        # All logits are shape [B, T, D]
+        # [B, T, num_pre_punct]
         self._punct_pre_loss: CrossEntropyLoss = CrossEntropyLoss(
-            weight=cfg.loss.punct_pre.get("weight"), ignore_index=self._ignore_idx, logits_ndim=4
+            weight=cfg.loss.punct_pre.get("weight"), ignore_index=self._ignore_idx, logits_ndim=3
         )
+        # [B, T, num_post_punct, max_chars_per_subword]
         self._punct_post_loss: CrossEntropyLoss = CrossEntropyLoss(
             weight=cfg.loss.punct_post.get("weight"), ignore_index=self._ignore_idx, logits_ndim=4
         )
+        # [B, T, 2] binary preds
         self._seg_loss: CrossEntropyLoss = CrossEntropyLoss(
             weight=cfg.loss.seg.get("weight"), ignore_index=self._ignore_idx, logits_ndim=3
         )
+        # [B, T, max_chars_per_subword]
         # For true-casing, we use multi-label classification to predict for each char in a subword
         self._cap_loss: nn.BCEWithLogitsLoss = nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor(cfg.loss.cap["weight"]) if "weight" in cfg.loss.cap else None
@@ -510,12 +513,36 @@ class PunctCapSegModel(NLPModel):
                 preds.append(current_char)
         return preds
 
-    def _get_char_punct_preds(
-        self, tokens: List[str], probs: List[List[float]], preds: List[List[int]], threshold: float, is_post: bool,
+    def _get_char_punct_pre_preds(
+        self, tokens: List[str], probs: List[float], preds: List[int], threshold: float
+    ) -> Dict[int, str]:
+        """Gathers subtoken-level pre-punctuation predictions"""
+        # one per character, for alignment purposes. Since these are mostly null, use a dict to specify non-null indices
+        output_preds: Dict[int, str] = {}
+        current_char = 0
+        for token_num, token in enumerate(tokens):
+            # Find out how many input chars this subtoken consumes
+            token_len = len(token)
+            if self._using_sp:
+                if token.startswith("▁"):
+                    token_len = len(token) - 1
+            else:
+                if token.startswith("##"):
+                    token_len = len(token) - 2
+            score = probs[token_num]
+            if score >= threshold:
+                pred = preds[token_num]
+                label = self._punct_pre_labels[pred]
+                output_preds[current_char] = label
+            # Advance to the end of this char
+            current_char += token_len
+        return output_preds
+
+    def _get_char_punct_post_preds(
+        self, tokens: List[str], probs: List[List[float]], preds: List[List[int]], threshold: float,
     ) -> List[str]:
         """Gathers character-level punctuation predictions from subword predictions"""
         char_preds: List[str] = []
-        labels = self._punct_post_labels if is_post else self._punct_pre_labels
         for token_num, token in enumerate(tokens):
             start = 0
             if self._using_sp:
@@ -527,7 +554,7 @@ class PunctCapSegModel(NLPModel):
                 score = probs[token_num][char_num]
                 if score >= threshold:
                     pred = preds[token_num][char_num]
-                    label = labels[pred]
+                    label = self._punct_post_labels[pred]
                     char_preds.append(label)
                 else:
                     char_preds.append(self._cfg.null_punct_token)
@@ -580,15 +607,16 @@ class PunctCapSegModel(NLPModel):
             pre_probs = pre_logits.softmax(dim=-1)
             pre_probs[..., self._null_punct_pre_index] = 1e-3
             all_pre_scores, all_pre_preds = pre_probs.max(dim=-1)
-            post_probs = post_logits.softmax(dim=-1)
-            post_probs[..., self._null_punct_post_index] = 1e-3
-            all_post_scores, all_post_preds = post_probs.max(dim=-1)
             all_pre_scores = self._unfold_tensors(
                 folded_tensor=all_pre_scores, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
             )
             all_pre_preds = self._unfold_tensors(
                 folded_tensor=all_pre_preds, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
             )
+
+            post_probs = post_logits.softmax(dim=-1)
+            post_probs[..., self._null_punct_post_index] = 1e-3
+            all_post_scores, all_post_preds = post_probs.max(dim=-1)
             all_post_scores = self._unfold_tensors(
                 folded_tensor=all_post_scores, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices,
             )
@@ -605,19 +633,17 @@ class PunctCapSegModel(NLPModel):
                 cap_char_preds = self._get_char_cap_preds(
                     tokens=tokens, probs=all_cap_scores[batch_idx], threshold=cap_threshold,
                 )
-                post_tokens = self._get_char_punct_preds(
+                post_tokens = self._get_char_punct_post_preds(
                     tokens=tokens,
                     probs=all_post_scores[batch_idx],
                     preds=all_post_preds[batch_idx],
                     threshold=punct_threshold,
-                    is_post=True,
                 )
-                pre_tokens = self._get_char_punct_preds(
+                pre_tokens = self._get_char_punct_pre_preds(
                     tokens=tokens,
                     probs=all_pre_scores[batch_idx],
                     preds=all_pre_preds[batch_idx],
                     threshold=punct_threshold,
-                    is_post=False,
                 )
                 break_points = self._get_char_seg_preds(
                     tokens=tokens, probs=all_seg_scores[batch_idx], threshold=seg_threshold,
@@ -632,9 +658,10 @@ class PunctCapSegModel(NLPModel):
                         output_chars.append(" ")
                         continue
                     # Maybe add punctuation before this char
-                    pre_token = pre_tokens[non_whitespace_index]
-                    if pre_token != self._cfg.null_punct_token:
-                        output_chars.append(pre_token)
+                    if non_whitespace_index in pre_tokens:
+                        pre_token = pre_tokens[non_whitespace_index]
+                        if pre_token != self._cfg.null_punct_token:
+                            output_chars.append(pre_token)
                     # Append true-cased input char to output
                     if cap_char_preds[non_whitespace_index] == 1:
                         output_chars.append(input_char.upper())
