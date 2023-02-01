@@ -26,7 +26,6 @@ from nemo.utils import logging
 
 class PunctCapSegModel(NLPModel):
     def __init__(self, cfg: DictConfig, trainer: Trainer = None) -> None:
-        cfg.tokenizer.tokenizer_model = "/Users/shane/corpora/wmt/spe_unigram_64k_lowercase_47lang.model"
         super().__init__(cfg=cfg, trainer=trainer)
         # During training, print metrics for these languages only
         self._log_metrics_for = set(cfg.get("log_metrics_for", []))
