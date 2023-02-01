@@ -8,7 +8,7 @@ from nemo.collections.nlp.modules.common.transformer import TransformerEncoder
 from nemo.collections.nlp.modules.common import TokenClassifier
 from nemo.core import typecheck
 from nemo.core.classes import NeuralModule
-from nemo.core.neural_types import NeuralType, ChannelType, LogitsType, MaskType
+from nemo.core.neural_types import NeuralType, ChannelType, LogitsType, MaskType, LabelsType
 from nemo.core.connectors.save_restore_connector import SaveRestoreConnector
 
 
@@ -18,8 +18,19 @@ class PunctCapSegDecoder(NeuralModule):
 
     @property
     def input_types(self) -> Optional[Dict[str, NeuralType]]:
-        #  bert model output {"last_hidden_states": NeuralType(('B', 'T', 'D'), ChannelType())}
-        return {"encoded": NeuralType(("B", "T", "D"), ChannelType()), "mask": NeuralType(("B", "T"), MaskType())}
+        """
+        When training, the reference punctuation targets are used to condition the true-casing and sentence-boundary
+        heads.
+
+        During inference, the model uses the punctuation predictions. In this case, we need a mask to know the length
+        of each subword, to ignore padded character positions within the punctuation predictions.
+        """
+        return {
+            "encoded": NeuralType(("B", "T", "D"), ChannelType()),
+            "mask": NeuralType(("B", "T"), MaskType()),
+            "punc_targets": NeuralType(("B", "T", "C"), LabelsType(), optional=True),  # training - reference targets
+            "punc_mask": NeuralType(("B", "T", "C"), MaskType(), optional=True),  # inference - valid characters
+        }
 
     @property
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
@@ -31,7 +42,13 @@ class PunctCapSegDecoder(NeuralModule):
         }
 
     @abc.abstractmethod
-    def forward(self, encoded: torch.Tensor, lengths: torch.Tensor):
+    def forward(
+        self,
+        encoded: torch.Tensor,
+        mask: torch.Tensor,
+        punc_mask: Optional[torch.Tensor] = None,
+        punc_targets: Optional[torch.Tensor] = None,
+    ):
         raise NotImplementedError()
 
     @classmethod
@@ -82,8 +99,6 @@ class LinearPunctCapSegDecoder(PunctCapSegDecoder):
             log_softmax=False,
             num_classes=punct_num_classes_post * max_subword_length,
         )
-        # "Pre" punctuation is only predicted once per subtoken, because in practice it only appears in Spanish before
-        # a complete token.
         self._punct_head_pre: TokenClassifier = TokenClassifier(
             hidden_size=encoder_dim,
             num_layers=punct_head_n_layers,
@@ -110,7 +125,13 @@ class LinearPunctCapSegDecoder(PunctCapSegDecoder):
         )
 
     @typecheck()
-    def forward(self, encoded: torch.Tensor, mask: torch.Tensor):
+    def forward(
+        self,
+        encoded: torch.Tensor,
+        mask: torch.Tensor,
+        punc_mask: Optional[torch.Tensor] = None,
+        punc_targets: Optional[torch.Tensor] = None,
+    ):
         # [B, T, num_post_punct * max_token_len]
         punct_logits_post = self._punct_head_post(hidden_states=encoded)
         # [B, T, num_pre_punct]
@@ -120,7 +141,7 @@ class LinearPunctCapSegDecoder(PunctCapSegDecoder):
         # [B, T, 2]
         seg_logits = self._seg_head(hidden_states=encoded)
 
-        # Unfold the logits to match the targets: [B, T, max_subword_len * C] -> [B, T, max_subword_len, C]
+        # Unfold the logits to align with chars: [B, T, max_subword_len * C] -> [B, T, max_subword_len, C]
         punct_logits_post = punct_logits_post.view([*punct_logits_post.shape[:-1], -1, self._num_post_punct_classes])
 
         return punct_logits_pre, punct_logits_post, cap_logits, seg_logits
@@ -128,9 +149,8 @@ class LinearPunctCapSegDecoder(PunctCapSegDecoder):
 
 class MHAPunctCapSegDecoder(PunctCapSegDecoder):
     """
-    FIXME when projecting the encoded tensor, padding for ignored character positions is not accounted for. Encoder
-        produces junk in these regions and the embeddings are effectively ignored.
-
+    Decoder with multi-headed attention to condition the true-casing and sentence-boundary heads with the punctuation
+    predictions.
     """
 
     def __init__(
@@ -139,7 +159,7 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         punct_num_classes_post: int,
         punct_num_classes_pre: int,
         max_subword_length: int,
-        punct_emb_dim: int = 4,
+        emb_dim: int = 4,
         punct_head_n_layers: int = 1,
         punct_head_dropout: float = 0.1,
         cap_head_n_layers: int = 1,
@@ -150,15 +170,15 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         transformer_inner_size: int = 512,
         transformer_num_heads: int = 4,
         transformer_ffn_dropout: float = 0.1,
+        post_punct_null_idx: int = 0,
     ):
         super().__init__()
         self._max_subword_len = max_subword_length
         self._num_post_punct_classes = punct_num_classes_post
-        self._num_pre_punct_classes = punct_num_classes_pre
-        self._punct_pre_projection: nn.Linear = nn.Linear(max_subword_length * punct_num_classes_pre, punct_emb_dim)
-        self._punct_post_projection: nn.Linear = nn.Linear(max_subword_length * punct_num_classes_post, punct_emb_dim)
-        # Will append whether each character is followed by a full stop candidate
-        self._encoder_hidden_dim = encoder_dim + 2 * punct_emb_dim
+        self._post_punct_null_idx = post_punct_null_idx
+        self._punct_emb = nn.Embedding(num_embeddings=punct_num_classes_post, embedding_dim=emb_dim)
+        # Will append embeddings for each of the N characters in a subword, up to max subtoken size
+        self._encoder_hidden_dim = encoder_dim + emb_dim * max_subword_length
         self._punct_head_post: TokenClassifier = TokenClassifier(
             hidden_size=encoder_dim,
             num_layers=punct_head_n_layers,
@@ -173,7 +193,7 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
             dropout=punct_head_dropout,
             activation="relu",
             log_softmax=False,
-            num_classes=punct_num_classes_pre * max_subword_length,
+            num_classes=punct_num_classes_pre,
         )
         self._cap_seg_encoder: TransformerEncoder = TransformerEncoder(
             num_layers=transformer_num_layers,
@@ -200,23 +220,41 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         )
 
     @typecheck()
-    def forward(self, encoded: torch.Tensor, mask: torch.Tensor):
+    def forward(
+        self,
+        encoded: torch.Tensor,
+        mask: torch.Tensor,
+        punc_mask: Optional[torch.Tensor] = None,
+        punc_targets: Optional[torch.Tensor] = None,
+    ):
         # [B, T, C * max_token_len]
         punct_logits_post = self._punct_head_post(hidden_states=encoded)
+        # Unfold the logits to match the targets: [B, T, max_subword_len * C] -> [B, T, max_subword_len, C]
+        punct_logits_post = punct_logits_post.view([*punct_logits_post.shape[:-1], -1, self._num_post_punct_classes])
+        # [B, T, C]
         punct_logits_pre = self._punct_head_pre(hidden_states=encoded)
-        # [B, T, emb_dim]
-        punct_emb_post = self._punct_post_projection(punct_logits_post.clone().detach())
-        punct_emb_pre = self._punct_pre_projection(punct_logits_pre.clone().detach())
-        # [B, T, D + 2*emb_dim]
-        cap_seg_input = torch.cat((encoded, punct_emb_post, punct_emb_pre), dim=2)
+
+        # At training time, we get the reference punctuation targets to teacher-force the other heads.
+        # At inference time, use the model's predictions.
+        if punc_targets is None:
+            # Compute the embeddings of predicted punctuation; concatenate to encoding
+            # [B, T, max_len, C] -> [B, T, max_subword_len].
+            post_preds = punct_logits_post.argmax(dim=-1).clone().detach()
+            # Fill with null indices which are padded (model is allowed to predict garbage)
+            post_preds = post_preds.masked_fill(mask=~punc_mask.bool(), value=self._post_punct_null_idx)
+            punc_targets = post_preds
+        # [B, T, max_subword_len, emb_dim]
+        embs = self._punct_emb(punc_targets)
+        # Stack and cat the embeddings
+        # [B, T, max_subword_len, emb_dim] -> [B, T, max_subword_len * emb_dim]
+        embs = embs.flatten(2)
+        # [B, T, D + max_subword_len * emb_dim]
+        cap_seg_input = torch.cat((encoded, embs), dim=-1)
+
         cap_seg_encoded = self._cap_seg_encoder(encoder_states=cap_seg_input, encoder_mask=mask)
         # [B, T, max_subword_len]
         cap_logits = self._cap_head(hidden_states=cap_seg_encoded)
         # [B, T, 2]
         seg_logits = self._seg_head(hidden_states=cap_seg_encoded)
-
-        # Unfold the logits to match the targets: [B, T, max_subword_len * C] -> [B, T, max_subword_len, C]
-        punct_logits_pre = punct_logits_pre.view([*punct_logits_pre.shape[:-1], -1, self._num_pre_punct_classes])
-        punct_logits_post = punct_logits_post.view([*punct_logits_post.shape[:-1], -1, self._num_post_punct_classes])
 
         return punct_logits_pre, punct_logits_post, cap_logits, seg_logits

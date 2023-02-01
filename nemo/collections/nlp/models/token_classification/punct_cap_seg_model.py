@@ -26,6 +26,7 @@ from nemo.utils import logging
 
 class PunctCapSegModel(NLPModel):
     def __init__(self, cfg: DictConfig, trainer: Trainer = None) -> None:
+        cfg.tokenizer.tokenizer_model = "/Users/shane/corpora/wmt/spe_unigram_64k_lowercase_47lang.model"
         super().__init__(cfg=cfg, trainer=trainer)
         # During training, print metrics for these languages only
         self._log_metrics_for = set(cfg.get("log_metrics_for", []))
@@ -245,7 +246,6 @@ class PunctCapSegModel(NLPModel):
 
     def _run_step(self, batch: Tuple):
         # All inputs and targets are shape [B, T]
-        # One pass: all heads uses the same input/encoding and predict in parallel
         inputs, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
         mask = inputs.ne(self.tokenizer.pad_id)
         # Encoded output is [B, T, D]
@@ -254,7 +254,21 @@ class PunctCapSegModel(NLPModel):
         if isinstance(encoded, tuple):
             encoded = encoded[0]
 
-        punct_logits_pre, punct_logits_post, cap_logits, seg_logits = self._decoder(encoded=encoded, mask=mask)
+        punc_mask = punct_post_targets.ne(self._cfg.get("ignore_idx", -100))
+        if self.training:
+            # In training mode, use the reference targets for teacher forcing
+            # Fill the padded region with null index, for embeddings
+            targets_for_decoder = punct_post_targets.masked_fill(
+                mask=~punc_mask.bool(), value=self._null_punct_post_index
+            )
+            punct_logits_pre, punct_logits_post, cap_logits, seg_logits = self._decoder(
+                encoded=encoded, mask=mask, punc_targets=targets_for_decoder
+            )
+        else:
+            # In inference mode, decoder must use its own predictions
+            punct_logits_pre, punct_logits_post, cap_logits, seg_logits = self._decoder(
+                encoded=encoded, mask=mask, punc_mask=punc_mask
+            )
 
         # Compute losses
         punct_pre_loss = self._punct_pre_loss(logits=punct_logits_pre, labels=punct_pre_targets)
@@ -565,7 +579,7 @@ class PunctCapSegModel(NLPModel):
         self,
         texts: List[str],
         cap_threshold: float = 0.5,
-        seg_threshold: float = 0.5,
+        seg_threshold: float = 0.75,
         punct_threshold: float = 0.5,
         fold_overlap: int = 20,
         batch_size: int = 32,
@@ -581,7 +595,7 @@ class PunctCapSegModel(NLPModel):
         )
         out_texts: List[List[str]] = []
         for batch in dataloader:
-            folded_input_ids, folded_batch_indices, lengths = batch
+            folded_input_ids, folded_batch_indices, lengths, punc_mask = batch
             mask = folded_input_ids.ne(self.tokenizer.pad_id)
             # [B, T, D]
             encoded = self.bert_model(input_ids=folded_input_ids, attention_mask=mask, token_type_ids=None,)
@@ -589,7 +603,9 @@ class PunctCapSegModel(NLPModel):
             if isinstance(encoded, tuple):
                 encoded = encoded[0]
 
-            pre_logits, post_logits, cap_logits, seg_logits = self._decoder(encoded=encoded, mask=mask)
+            pre_logits, post_logits, cap_logits, seg_logits = self._decoder(
+                encoded=encoded, mask=mask, punc_mask=punc_mask
+            )
 
             # [B, T, max_token_len]
             all_cap_scores = cap_logits.sigmoid()

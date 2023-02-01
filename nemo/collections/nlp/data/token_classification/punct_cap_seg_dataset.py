@@ -7,7 +7,7 @@ import torch
 
 from nemo.collections.common.tokenizers import TokenizerSpec, SentencePieceTokenizer
 from nemo.core import Dataset, typecheck
-from nemo.core.neural_types import ChannelType, IntType, LengthsType, NeuralType, LabelsType
+from nemo.core.neural_types import ChannelType, IntType, LengthsType, NeuralType, LabelsType, MaskType
 from nemo.utils import logging
 
 
@@ -30,6 +30,8 @@ class InferencePunctCapSegDataset(Dataset):
         input_file: Optional[str] = None,
         max_length: int = 512,
         fold_overlap: int = 16,
+        ignore_idx: int = -100,
+        max_subword_length: int = 16,
     ):
         super().__init__()
         if not ((input_texts is None) ^ (input_file is None)):
@@ -37,6 +39,9 @@ class InferencePunctCapSegDataset(Dataset):
         self._tokenizer = tokenizer
         self._max_length = max_length
         self._fold_overlap = fold_overlap
+        self._ignore_idx = ignore_idx
+        self._max_subword_length = max_subword_length
+        self._using_sp = isinstance(self._tokenizer, SentencePieceTokenizer)
 
         self._data: List[str]
         if input_texts is not None:
@@ -54,6 +59,7 @@ class InferencePunctCapSegDataset(Dataset):
             "folded_input_ids": NeuralType(("B", "T"), ChannelType()),
             "folded_batch_ids": NeuralType(("B",), IntType()),
             "lengths": NeuralType(("B",), LengthsType()),
+            "punc_mask": NeuralType(("B", "T", "D"), MaskType()),  # D == max_subtoken_len
         }
 
     def __len__(self):
@@ -61,10 +67,11 @@ class InferencePunctCapSegDataset(Dataset):
 
     def __getitem__(self, idx):
         input_text = self._data[idx]
+        # Don't add BOS/EOS yet because sequences get wrapped to max length in collate_fn
         input_ids = self._tokenizer.text_to_ids(input_text)
         return input_ids, input_text
 
-    def _fold_batch(self, input_ids: List[List[int]]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _fold_batch(self, input_ids: List[List[int]]) -> Tuple[torch.Tensor, ...]:
         """Folds inputs to adhere to max length"""
         out_batch_ids: List[int] = []
         out_input_ids: List[List[int]] = []
@@ -88,10 +95,21 @@ class InferencePunctCapSegDataset(Dataset):
         ids_tensor = torch.full(
             size=[lengths.shape[0], lengths.max()], dtype=torch.long, fill_value=self._tokenizer.pad_id  # noqa
         )
-        for i, ids in enumerate(out_input_ids):
-            ids_tensor[i, : len(ids)] = torch.tensor(ids)
+        punc_mask = torch.zeros(size=[lengths.shape[0], lengths.max(), self._max_subword_length])
+        for batch_idx, ids in enumerate(out_input_ids):
+            ids_tensor[batch_idx, : len(ids)] = torch.tensor(ids)
+            tokens = self._tokenizer.ids_to_tokens(ids[1:-1])
+            for token_idx, token in enumerate(tokens):
+                start = 0
+                if self._using_sp:
+                    if token.startswith("▁"):
+                        start = 1
+                elif token.startswith("##"):
+                    start = 2
+                # Offset by one because sequences have BOS
+                punc_mask[batch_idx, token_idx + 1, start : len(token) + 1] = 1
 
-        return ids_tensor, lengths, batch_ids
+        return ids_tensor, lengths, batch_ids, punc_mask
 
     @typecheck()
     def collate_fn(self, batch):
@@ -105,8 +123,8 @@ class InferencePunctCapSegDataset(Dataset):
                 the original input texts.
         """
         all_ids: List[List[int]] = [x[0] for x in batch]
-        input_ids, lengths, batch_ids = self._fold_batch(all_ids)
-        return input_ids, batch_ids, lengths
+        input_ids, lengths, batch_ids, punc_mask = self._fold_batch(all_ids)
+        return input_ids, batch_ids, lengths, punc_mask
 
 
 class PunctCapSegDataset(Dataset):
@@ -281,7 +299,6 @@ class PuncTargetsGenerator(abc.ABC):
         # Save as set for quick membership check
         self._pre_labels = set(pre_labels)
         self._post_labels = set(post_labels)
-        self._joint_labels = self._pre_labels | self._post_labels
         self._max_token_len = None
 
     @abc.abstractmethod
