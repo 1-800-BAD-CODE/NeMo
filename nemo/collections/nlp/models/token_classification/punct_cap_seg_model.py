@@ -235,7 +235,7 @@ class PunctCapSegModel(NLPModel):
         dataloader = torch.utils.data.DataLoader(
             dataset=dataset,
             collate_fn=datasets[0].collate_fn,  # TODO assumption; works for now
-            batch_size=cfg.get("batch_size", 32),
+            batch_size=cfg.get("batch_size", 256),
             num_workers=cfg.get("num_workers", 8),
             pin_memory=cfg.get("pin_memory", False),
             drop_last=cfg.get("drop_last", False),
@@ -253,21 +253,14 @@ class PunctCapSegModel(NLPModel):
         if isinstance(encoded, tuple):
             encoded = encoded[0]
 
+        # Make a binary mask from the post punc targets
         punc_mask = punct_post_targets.ne(self._cfg.get("ignore_idx", -100))
-        if self.training:
-            # In training mode, use the reference targets for teacher forcing
-            # Fill the padded region with null index, for embeddings
-            targets_for_decoder = punct_post_targets.masked_fill(
-                mask=~punc_mask.bool(), value=self._null_punct_post_index
-            )
-            punct_logits_pre, punct_logits_post, cap_logits, seg_logits = self._decoder(
-                encoded=encoded, mask=mask, punc_targets=targets_for_decoder
-            )
-        else:
-            # In inference mode, decoder must use its own predictions
-            punct_logits_pre, punct_logits_post, cap_logits, seg_logits = self._decoder(
-                encoded=encoded, mask=mask, punc_mask=punc_mask
-            )
+        # In training mode, feed the true labels for teacher forcing. In validation, use the predicted punctuation.
+        targets_for_decoder = punct_post_targets if self.training else None
+        # Run joint decoder
+        punct_logits_pre, punct_logits_post, cap_logits, seg_logits = self._decoder(
+            encoded=encoded, mask=mask, punc_mask=punc_mask, punc_targets=targets_for_decoder
+        )
 
         # Compute losses
         punct_pre_loss = self._punct_pre_loss(logits=punct_logits_pre, labels=punct_pre_targets)
@@ -578,7 +571,7 @@ class PunctCapSegModel(NLPModel):
         self,
         texts: List[str],
         cap_threshold: float = 0.5,
-        seg_threshold: float = 0.75,
+        seg_threshold: float = 0.5,
         punct_threshold: float = 0.5,
         fold_overlap: int = 20,
         batch_size: int = 32,
@@ -595,6 +588,7 @@ class PunctCapSegModel(NLPModel):
         out_texts: List[List[str]] = []
         for batch in dataloader:
             folded_input_ids, folded_batch_indices, lengths, punc_mask = batch
+            print(f"{folded_input_ids.shape=}")
             mask = folded_input_ids.ne(self.tokenizer.pad_id)
             # [B, T, D]
             encoded = self.bert_model(input_ids=folded_input_ids, attention_mask=mask, token_type_ids=None,)

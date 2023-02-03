@@ -59,7 +59,7 @@ class PunctCapSegDecoder(NeuralModule):
         map_location: Optional["torch.device"] = None,
         strict: bool = True,
         return_config: bool = False,
-        trainer: Optional["Trainer"] = None,
+        trainer: Optional["Trainer"] = None,  # noqa
         save_restore_connector: SaveRestoreConnector = None,
     ):
         pass
@@ -167,7 +167,7 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         seg_head_n_layers: int = 1,
         seg_head_dropout: float = 0.1,
         transformer_num_layers: int = 2,
-        transformer_inner_size: int = 512,
+        transformer_inner_size: int = 2048,
         transformer_num_heads: int = 4,
         transformer_ffn_dropout: float = 0.1,
         post_punct_null_idx: int = 0,
@@ -176,7 +176,14 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         self._max_subword_len = max_subword_length
         self._num_post_punct_classes = punct_num_classes_post
         self._post_punct_null_idx = post_punct_null_idx
-        self._punct_emb = nn.Embedding(num_embeddings=punct_num_classes_post, embedding_dim=emb_dim)
+        # Use an extra embedding for padding
+        self._emb_pad_idx = punct_num_classes_post
+        self._punct_emb = nn.Embedding(
+            num_embeddings=punct_num_classes_post + 1, embedding_dim=emb_dim, padding_idx=self._emb_pad_idx
+        )
+        # Initialize the embeddings to the same scale as the attn module and heads
+        nn.init.normal_(self._punct_emb.weight, mean=0.0, std=0.02)
+
         # Will append embeddings for each of the N characters in a subword, up to max subtoken size
         self._encoder_hidden_dim = encoder_dim + emb_dim * max_subword_length
         self._punct_head_post: TokenClassifier = TokenClassifier(
@@ -224,7 +231,7 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         self,
         encoded: torch.Tensor,
         mask: torch.Tensor,
-        punc_mask: Optional[torch.Tensor] = None,
+        punc_mask: torch.Tensor,
         punc_targets: Optional[torch.Tensor] = None,
     ):
         # [B, T, C * max_token_len]
@@ -237,12 +244,11 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         # At training time, we get the reference punctuation targets to teacher-force the other heads.
         # At inference time, use the model's predictions.
         if punc_targets is None:
-            # Compute the embeddings of predicted punctuation; concatenate to encoding
-            # [B, T, max_len, C] -> [B, T, max_subword_len].
-            post_preds = punct_logits_post.argmax(dim=-1).clone().detach()
-            # Fill with null indices which are padded (model is allowed to predict garbage)
-            post_preds = post_preds.masked_fill(mask=~punc_mask.bool(), value=self._post_punct_null_idx)
-            punc_targets = post_preds
+            # [B, T, max_subword_len, C] -> [B, T, max_subword_len]
+            # Note - no need to detach because this should not happen in train mode.
+            punc_targets = punct_logits_post.argmax(dim=-1)
+        # Fill with null indices which are padded (model is allowed to predict garbage)
+        punc_targets = punc_targets.masked_fill(mask=~punc_mask.bool(), value=self._emb_pad_idx)
         # [B, T, max_subword_len, emb_dim]
         embs = self._punct_emb(punc_targets)
         # Stack and cat the embeddings

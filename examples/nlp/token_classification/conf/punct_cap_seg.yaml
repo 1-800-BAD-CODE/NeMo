@@ -1,6 +1,12 @@
 
 name: "punct_cap_seg"
-init_from_nemo_model: /home/ubuntu/pcs_47_linear.nemo
+init_from_nemo_model:
+  model0:
+    path: /home/ubuntu/punct_post_f1_81.2040_last.nemo
+    exclude: [
+      "_decoder._seg_head",
+      "_decoder._cap_head",
+    ]
 
 model:
   # For reference only
@@ -47,7 +53,7 @@ model:
       type_vocab_size: 1
 
   decoder:
-    _target_: nemo.collections.nlp.modules.token_classification.LinearPunctCapSegDecoder
+    _target_: nemo.collections.nlp.modules.token_classification.MHAPunctCapSegDecoder
     punct_num_classes_post: null  # will get set by model
     punct_num_classes_pre: null  # will get set by model
     max_subword_length: null  # will get set by model
@@ -58,6 +64,12 @@ model:
     cap_head_n_layers: 1
     punct_head_n_layers: 1
     seg_head_n_layers: 1
+    emb_dim: 4
+    transformer_num_layers: 2
+    transformer_inner_size: 2048
+    transformer_num_heads: 8
+    transformer_ffn_dropout: 0.1
+    post_punct_null_idx: 0  # TODO should be set by model
 
   null_punct_token: "<NULL>"
   # Punctuation tokens that are predicted before each subword. Add "¡" here if using it.
