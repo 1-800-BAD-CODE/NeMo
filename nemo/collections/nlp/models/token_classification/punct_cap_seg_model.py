@@ -294,7 +294,7 @@ class PunctCapSegModel(NLPModel):
         return loss
 
     def _eval_step(self, batch: Tuple, dataloader_idx: int = 0) -> None:
-        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch, testing=True)
+        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch)
         _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
         # All log probs are [B, T, D]
         punct_pre_preds = punct_pre_logits.argmax(dim=-1)
@@ -315,7 +315,7 @@ class PunctCapSegModel(NLPModel):
         metrics["seg_report"](seg_preds[seg_mask], seg_targets[seg_mask])
 
     def _test_step(self, batch: Tuple, dataloader_idx: int = 0) -> None:
-        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch)
+        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch, testing=True)
         _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
         # Prepare masks
         cap_mask = cap_targets.ne(self._ignore_idx)
