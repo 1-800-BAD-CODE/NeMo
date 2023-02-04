@@ -101,7 +101,7 @@ model:
       weight: 2.0  # BCE - only positive class weight
     # Loss weights for [no_stop, full_stop]
     seg:
-      weight: [1.0, 3.0]
+      weight: [1.0, 2.0]
   # Target padding value. No need to change.
   pad_value: -100
 

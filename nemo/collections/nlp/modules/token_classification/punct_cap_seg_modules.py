@@ -29,6 +29,7 @@ class PunctCapSegDecoder(NeuralModule):
             "encoded": NeuralType(("B", "T", "D"), ChannelType()),
             "mask": NeuralType(("B", "T"), MaskType()),
             "punc_targets": NeuralType(("B", "T", "C"), LabelsType(), optional=True),  # training - reference targets
+            "seg_targets": NeuralType(("B", "T"), LabelsType(), optional=True),  # training - reference targets
             "punc_mask": NeuralType(("B", "T", "C"), MaskType(), optional=True),  # inference - valid characters
         }
 
@@ -131,6 +132,7 @@ class LinearPunctCapSegDecoder(PunctCapSegDecoder):
         mask: torch.Tensor,
         punc_mask: Optional[torch.Tensor] = None,
         punc_targets: Optional[torch.Tensor] = None,
+        seg_targets: Optional[torch.Tensor] = None,
     ):
         # [B, T, num_post_punct * max_token_len]
         punct_logits_post = self._punct_head_post(hidden_states=encoded)
@@ -217,8 +219,9 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
             log_softmax=False,
             num_classes=2,
         )
+        # Will append sentence boundary predictions
         self._cap_head: TokenClassifier = TokenClassifier(
-            hidden_size=self._encoder_hidden_dim,
+            hidden_size=self._encoder_hidden_dim + 1,
             num_layers=cap_head_n_layers,
             dropout=cap_head_dropout,
             activation="relu",
@@ -233,6 +236,7 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         mask: torch.Tensor,
         punc_mask: torch.Tensor,
         punc_targets: Optional[torch.Tensor] = None,
+        seg_targets: Optional[torch.Tensor] = None,
     ):
         # [B, T, C * max_token_len]
         punct_logits_post = self._punct_head_post(hidden_states=encoded)
@@ -255,12 +259,26 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         # [B, T, max_subword_len, emb_dim] -> [B, T, max_subword_len * emb_dim]
         embs = embs.flatten(2)
         # [B, T, D + max_subword_len * emb_dim]
-        cap_seg_input = torch.cat((encoded, embs), dim=-1)
+        cap_seg_encoder_input = torch.cat((encoded, embs), dim=-1)
 
-        cap_seg_encoded = self._cap_seg_encoder(encoder_states=cap_seg_input, encoder_mask=mask)
-        # [B, T, max_subword_len]
-        cap_logits = self._cap_head(hidden_states=cap_seg_encoded)
+        cap_seg_encoded = self._cap_seg_encoder(encoder_states=cap_seg_encoder_input, encoder_mask=mask)
         # [B, T, 2]
         seg_logits = self._seg_head(hidden_states=cap_seg_encoded)
+
+        # In inference mode, generate the sentence boundary predictions
+        if seg_targets is None:
+            seg_targets = seg_logits.argmax(dim=-1)
+        # For consistency, set the first token position to 1 (effectively a sentence boundary)
+        seg_targets[:, 0] = 1
+        # Shift the targets right by one, to indicate which tokens are the beginning of a sentence rather than the end.
+        seg_targets = torch.nn.functional.pad(seg_targets, pad=[1, 0])
+        # Trim the right because we padded left
+        seg_targets = seg_targets[:, :-1]
+        # [B, T] -> [B, T, 1]
+        seg_targets = seg_targets.unsqueeze(-1)
+        # Concatenate the shifted sentence boundary predictions for the truecase head
+        cap_head_input = torch.cat((cap_seg_encoded, seg_targets), dim=-1)
+        # [B, T, max_subword_len]
+        cap_logits = self._cap_head(hidden_states=cap_head_input)
 
         return punct_logits_pre, punct_logits_post, cap_logits, seg_logits

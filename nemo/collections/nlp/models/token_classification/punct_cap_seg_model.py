@@ -255,11 +255,16 @@ class PunctCapSegModel(NLPModel):
 
         # Make a binary mask from the post punc targets
         punc_mask = punct_post_targets.ne(self._cfg.get("ignore_idx", -100))
-        # In training mode, feed the true labels for teacher forcing. In validation, use the predicted punctuation.
-        targets_for_decoder = punct_post_targets if self.training else None
+        # In training mode, feed the true labels for teacher forcing. In validation, use the predicted values.
+        punc_targets_for_decoder = punct_post_targets if self.training else None
+        seg_targets_for_decoder = seg_targets if self.training else None
         # Run joint decoder
         punct_logits_pre, punct_logits_post, cap_logits, seg_logits = self._decoder(
-            encoded=encoded, mask=mask, punc_mask=punc_mask, punc_targets=targets_for_decoder
+            encoded=encoded,
+            mask=mask,
+            punc_mask=punc_mask,
+            punc_targets=punc_targets_for_decoder,
+            seg_targets=seg_targets_for_decoder,
         )
 
         # Compute losses
