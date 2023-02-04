@@ -29,7 +29,8 @@ class PunctCapSegModel(NLPModel):
     def __init__(self, cfg: DictConfig, trainer: Trainer = None) -> None:
         super().__init__(cfg=cfg, trainer=trainer)
         # During training, print metrics for these languages only
-        self._log_metrics_for = set(cfg.get("log_metrics_for", []))
+        self._log_val_metrics_for = set(cfg.get("log_val_metrics_for", []))
+        self._log_train_metrics = cfg.get("log_train_metrics", False)
         # Should be set to the training DS max length; default to the positional embeddings size
         self._max_length = self._cfg.get("max_length", self.bert_model.config.max_position_embeddings)
 
@@ -94,9 +95,10 @@ class PunctCapSegModel(NLPModel):
                 dataset.tokenizer = self.tokenizer
 
         # Will be populated when dev/test sets are setup
-        self._dev_metrics: nn.ModuleList[nn.ModuleDict] = nn.ModuleList()
+        self._dev_metrics: nn.ModuleList = nn.ModuleList()
         if self._validation_dl is not None:
             self._dev_metrics = self._setup_metrics(len(self._validation_dl))
+        self._train_metrics: nn.ModuleDict = self._setup_metrics()
         # module list of module dict
         self._test_metrics: Optional[nn.ModuleList[nn.ModuleDict]] = None
 
@@ -122,7 +124,7 @@ class PunctCapSegModel(NLPModel):
             metrics.append(self._setup_metrics(num_dl=1)[0])
         return metrics
 
-    def _setup_metrics(self, num_dl: int = 1) -> nn.ModuleList:
+    def _setup_metrics(self, num_dl: int = 1) -> Union[nn.ModuleDict, nn.ModuleList]:
         """Creates metrics for each data loader. Typically, we have one DL per language.
 
         Metrics are reported for punctuation (pre- and post-token), true casing, segmentation, and loss.
@@ -158,6 +160,8 @@ class PunctCapSegModel(NLPModel):
                 }
             )
             module_list.append(metrics)
+        if num_dl == 1:
+            return module_list[0]
         return module_list
 
     def _setup_eval_dataloaders_from_config(self, cfg) -> List[torch.utils.data.DataLoader]:
@@ -259,15 +263,12 @@ class PunctCapSegModel(NLPModel):
         # In training mode, always feed ground truth predictions to the heads.
         # For val, it's useful to use reference to not penalize the cap/seg heads for bad punctuation predictions when
         # selecting the best model.
-        punc_targets_for_decoder = None if testing else punct_post_targets
-        seg_targets_for_decoder = None if testing else seg_targets
-        # Run joint decoder
         punct_logits_pre, punct_logits_post, cap_logits, seg_logits = self._decoder(
             encoded=encoded,
             mask=mask,
             punc_mask=punc_mask,
-            punc_targets=punc_targets_for_decoder,
-            seg_targets=seg_targets_for_decoder,
+            punc_targets=None if testing else punct_post_targets,
+            seg_targets=None if testing else seg_targets,
         )
 
         # Compute losses
@@ -286,11 +287,49 @@ class PunctCapSegModel(NLPModel):
 
         return loss, punct_logits_pre, punct_logits_post, cap_logits, seg_logits
 
-    def training_step(self, batch: Tuple[torch.Tensor], batch_idx: int):
-        loss, _, _, _, _ = self._run_step(batch)
+    def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int):
+        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch)
         lr = self._optimizer.param_groups[0]["lr"]
         self.log("lr", lr, prog_bar=True)
         self.log("train_loss", loss)
+
+        # Maybe accumulate batch metrics
+        if batch_idx % self._cfg.get("batch_metrics_every_n_steps", 10) == 0:
+            _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
+            punct_pre_preds = punct_pre_logits.argmax(dim=-1)
+            punct_post_preds = punct_post_logits.argmax(dim=-1)
+            cap_mask = cap_targets.ne(self._ignore_idx)
+            cap_preds = cap_logits[cap_mask].sigmoid().gt(0.5)
+            seg_mask = seg_targets.ne(self._ignore_idx)
+            seg_preds = seg_logits.argmax(dim=-1)
+
+            punct_pre_mask = punct_pre_targets.ne(self._ignore_idx)
+            punct_post_mask = punct_post_targets.ne(self._ignore_idx)
+            self._train_metrics["punct_pre_report"](punct_pre_preds[punct_pre_mask], punct_pre_targets[punct_pre_mask])
+            self._train_metrics["punct_post_report"](
+                punct_post_preds[punct_post_mask], punct_post_targets[punct_post_mask]
+            )
+            self._train_metrics["cap_report"](cap_preds, cap_targets[cap_mask])
+            self._train_metrics["seg_report"](seg_preds[seg_mask], seg_targets[seg_mask])
+
+        # Maybe log and reset batch metrics
+        if batch_idx > 0 and batch_idx % self._trainer.log_every_n_steps == 0:
+            for analytic in ["punct_pre", "punct_post", "cap", "seg"]:
+                precision, recall, f1, report = self._train_metrics[f"{analytic}_report"].compute()
+                self._train_metrics[f"{analytic}_report"].reset()
+                # For some analytics, NaN/inf are natural; e.g. uncased languages with no true-case targets.
+                if precision.isnan():
+                    precision = torch.zeros_like(precision)
+                if recall.isnan():
+                    recall = torch.zeros_like(recall)
+                if f1.isnan():
+                    f1 = torch.zeros_like(f1)
+                self.log(f"train_batch/{analytic}_precision", precision)
+                self.log(f"train_batch/{analytic}_recall", recall)
+                self.log(f"train_batch/{analytic}_f1", f1)
+                if self._log_train_metrics:
+                    logging.info(f"Train batch {analytic} report: {report}")
+
         return loss
 
     def _eval_step(self, batch: Tuple, dataloader_idx: int = 0) -> None:
@@ -361,9 +400,6 @@ class PunctCapSegModel(NLPModel):
         language = ds.language
         return language
 
-    # def on_validation_epoch_start(self) -> None:
-    #     pass
-
     def _multi_eval_epoch_end(self, dataloader_idx: int):
         """ Epoch end logic for both validation and test """
         metric_dict: nn.ModuleDict = self._dev_metrics[dataloader_idx]
@@ -389,7 +425,7 @@ class PunctCapSegModel(NLPModel):
             self.log(f"val_{language}/{analytic}_precision", precision)
             self.log(f"val_{language}/{analytic}_recall", recall)
             self.log(f"val_{language}/{analytic}_f1", f1)
-            if language in self._log_metrics_for:
+            if language in self._log_val_metrics_for:
                 logging.info(f"{analytic} report for '{language}': {report}")
 
     # TODO re-enable these, in the case of using only one language.
@@ -431,6 +467,17 @@ class PunctCapSegModel(NLPModel):
 
     def test_step(self, batch: Tuple[torch.Tensor], batch_idx: int, dataloader_idx: int = 0) -> None:
         self._test_step(batch=batch, dataloader_idx=dataloader_idx)
+
+    def on_validation_epoch_start(self) -> None:
+        """
+        This function re-seeds the validation data loaders at the beginning of each epoch in the event of using 0
+        num_workers. Normally, worker_init_fn ensures that during each validation epoch the same examples are generated.
+        This is needed when using no workers, and the data is loaded in the main process without calling worker_init_fn.
+        """
+        super().on_validation_epoch_start()
+        for dataloader in self._validation_dl:
+            if dataloader.num_workers == 0:
+                dataloader.dataset.worker_init_fn(worker_id=0)
 
     @typecheck()
     def forward(self, input_ids: torch.Tensor, lengths: torch.Tensor):

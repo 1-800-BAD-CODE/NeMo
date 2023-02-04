@@ -275,7 +275,7 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         # Trim the right because we padded left
         seg_targets = seg_targets[:, :-1]
         # Note that the seg targets contain -100 (ignore_idx) in BOS/EOS positions, but BOS is overwritten and EOS
-        # sis shifted right, into the padding region.
+        # is shifted right, into the padding region.
         # [B, T] -> [B, T, 1]
         seg_targets = seg_targets.unsqueeze(-1)
         # Concatenate the shifted sentence boundary predictions for the truecase head

@@ -18,8 +18,12 @@ model:
       "sr", "sw", "ta", "te", "tr", "uk", "zh"
   ]
   # Print dev metrics to stdout during training for these languages
-  log_metrics_for:
+  log_val_metrics_for:
     - en
+  # Whether to print the training metrics to stdout every `trainer.log_every_n_steps`
+  log_train_metrics: true
+  # Accumulate batch metrics every this many steps. Useful for getting more data points into logging.
+  batch_metrics_every_n_steps: 25
 
   max_length: 128
 
@@ -273,7 +277,7 @@ model:
 
   validation_ds:
     batch_size: 256
-    num_workers: 4
+    num_workers: 0
     # "common" options are analogous to train_ds
     common:
       punct_pre_labels: ${model.punct_pre_labels}
@@ -436,7 +440,7 @@ model:
 
   optim:
     name: adam
-    lr: 2e-5   # note that 4 losses are aggregated together
+    lr: 2e-5
     sched:
       name: WarmupAnnealing
       min_lr: 1e-6
@@ -455,7 +459,7 @@ trainer:
   accelerator: auto
   strategy: dp
   num_sanity_val_steps: 1
-  log_every_n_steps:  100  # Interval of logging.
+  log_every_n_steps:  300  # Interval of logging.
   val_check_interval: 2000  # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
   resume_from_checkpoint: null
   logger: false
@@ -463,11 +467,11 @@ trainer:
   benchmark: false
 
 exp_manager:
-  exp_dir: nemo_exp/
+  exp_dir: /home/ubuntu/nemo_exp/
   name: ${name}
   create_tensorboard_logger: true
   create_checkpoint_callback: true
-  # Available metrics are val_{language}_{punct_pre,punct_post,cap,seg}_{f1,precision,recall}
+  # Available metrics are val_{language}/{loss,{punct_pre,punct_post,cap,seg}_{f1,precision,recall}
   checkpoint_callback_params:
     monitor: "val_en/loss"
     mode: "min"
