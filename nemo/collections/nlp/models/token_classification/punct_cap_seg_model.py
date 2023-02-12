@@ -20,8 +20,7 @@ from nemo.collections.nlp.metrics.classification_report import ClassificationRep
 from nemo.collections.nlp.models.nlp_model import NLPModel
 from nemo.collections.nlp.modules.token_classification import PunctCapSegDecoder
 from nemo.core import PretrainedModelInfo, typecheck
-
-# from nemo.core.neural_types import ChannelType, LengthsType, LogitsType, NeuralType
+from nemo.core.neural_types import ChannelType, LengthsType, MaskType, NeuralType, LogitsType
 from nemo.utils import logging
 
 
@@ -30,6 +29,7 @@ class PunctCapSegModel(NLPModel):
         super().__init__(cfg=cfg, trainer=trainer)
         # During training, print metrics for these languages only
         self._log_val_metrics_for = set(cfg.get("log_val_metrics_for", []))
+        # Whether to print the metrics report for training data. Generates a lot of output.
         self._log_train_metrics = cfg.get("log_train_metrics", False)
         # Should be set to the training DS max length; default to the positional embeddings size
         self._max_length = self._cfg.get("max_length", self.bert_model.config.max_position_embeddings)
@@ -100,14 +100,13 @@ class PunctCapSegModel(NLPModel):
             self._dev_metrics = self._setup_metrics(len(self._validation_dl))
         self._train_metrics: nn.ModuleDict = self._setup_metrics()
         # module list of module dict
-        self._test_metrics: Optional[nn.ModuleList[nn.ModuleDict]] = None
+        self._test_metrics: nn.ModuleDict = self._setup_metrics()
 
     def setup_multiple_validation_data(self, val_data_config: Union[DictConfig, Dict]):
         self.setup_validation_data(val_data_config)
 
     def setup_test_data(self, test_data_config: Union[DictConfig, Dict]):
         self._test_dl = self._setup_test_dataloader_from_config(cfg=test_data_config)
-        self._test_metrics = self._setup_test_metrics(test_data_config.get("num_thresholds", 1))
 
     def setup_validation_data(self, val_data_config: Union[DictConfig, Dict]):
         self._validation_dl = self._setup_eval_dataloaders_from_config(cfg=val_data_config)
@@ -118,12 +117,6 @@ class PunctCapSegModel(NLPModel):
     def setup_training_data(self, train_data_config: Union[DictConfig, Dict]):
         self._train_dl = self._setup_train_dataloader_from_config(cfg=train_data_config)
 
-    def _setup_test_metrics(self, num_thresholds: int = 100) -> nn.ModuleList:
-        metrics: nn.ModuleList = nn.ModuleList()
-        for _ in range(num_thresholds):
-            metrics.append(self._setup_metrics(num_dl=1)[0])
-        return metrics
-
     def _setup_metrics(self, num_dl: int = 1) -> Union[nn.ModuleDict, nn.ModuleList]:
         """Creates metrics for each data loader. Typically, we have one DL per language.
 
@@ -131,7 +124,8 @@ class PunctCapSegModel(NLPModel):
 
         Returns:
             A :class:``nn.ModuleList``, with one element per data loader. Each element is another
-            :class:``nn.ModuleList`` of metrics for that language.
+            :class:``nn.ModuleList`` of metrics for that language. If `num_dl == 1`, then a single `nn.ModuleDict` is
+            returned.
 
         """
         module_list: nn.ModuleList = nn.ModuleList()
@@ -193,14 +187,20 @@ class PunctCapSegModel(NLPModel):
         return dataloaders
 
     def _setup_test_dataloader_from_config(self, cfg) -> List[torch.utils.data.DataLoader]:
+        # Add the model-specific parameters needed for generating targets for metrics
+        with open_dict(cfg):
+            cfg.dataset.punct_pre_labels = self._cfg.punct_pre_labels
+            cfg.dataset.punct_post_labels = self._cfg.punct_post_labels
+            cfg.dataset.max_length = self._max_length
+        # _target_ should instantiate a PunctCapSegDataset
         dataset: PunctCapSegDataset = instantiate(cfg.dataset)
         if not isinstance(dataset, PunctCapSegDataset):
             raise ValueError(
                 f"Expected dataset config to instantiate an implementation of 'PunctCapSegDataset' but instead got "
                 f"'{type(dataset)}' from config {cfg.dataset}."
             )
-        if hasattr(self, "tokenizer"):
-            dataset.tokenizer = self.tokenizer
+        # Pass tokenizer to test set
+        dataset.tokenizer = self.tokenizer
         dataloader = torch.utils.data.DataLoader(
             dataset=dataset,
             collate_fn=dataset.collate_fn,
@@ -365,35 +365,16 @@ class PunctCapSegModel(NLPModel):
         punct_pre_probs = punct_pre_logits.softmax(dim=-1)
         punct_post_probs = punct_post_logits.softmax(dim=-1)
         seg_probs = seg_logits.softmax(dim=-1)[..., 1]
-        cap_probs = cap_logits[cap_mask].sigmoid()  # Setup as a BCE multi-label problem
-        # Ignore the punctuation null index, for thresholding purposes
-        punct_pre_probs[..., self._null_punct_pre_index] = 1e-3
-        punct_post_probs[..., self._null_punct_post_index] = 1e-3
+        cap_probs = cap_logits[cap_mask].sigmoid()
 
-        num_thresholds = len(self._test_metrics)
-        # bounds are [0.0, 1.0] inclusive, and N-2 thresholds between bounds. For one, use default 0.5
-        if num_thresholds > 1:
-            thresholds = torch.arange(num_thresholds) / (num_thresholds - 1)
-        else:
-            thresholds = [0.5]
-        punct_pre_scores, punct_pre_preds = punct_pre_probs.max(dim=-1)
-        punct_post_scores, punct_post_preds = punct_post_probs.max(dim=-1)
-        for i, threshold in enumerate(thresholds):
-            seg_preds = seg_probs.ge(threshold)
-            cap_preds = cap_probs.ge(threshold)
-            # Predict null if punctuation scores low
-            pre_threshold_mask = punct_pre_scores.lt(threshold)
-            post_threshold_mask = punct_post_scores.lt(threshold)
-            thresholded_pre_preds = punct_pre_preds.masked_fill(pre_threshold_mask, self._null_punct_pre_index)
-            thresholded_post_preds = punct_post_preds.masked_fill(post_threshold_mask, self._null_punct_pre_index)
-            self._test_metrics[i]["punct_pre_report"](
-                thresholded_pre_preds[punct_pre_mask], punct_pre_targets[punct_pre_mask]
-            )
-            self._test_metrics[i]["punct_post_report"](
-                thresholded_post_preds[punct_post_mask], punct_post_targets[punct_post_mask]
-            )
-            self._test_metrics[i]["cap_report"](cap_preds, cap_targets[cap_mask])
-            self._test_metrics[i]["seg_report"](seg_preds[seg_mask], seg_targets[seg_mask])
+        punct_pre_preds = punct_pre_probs.argmax(dim=-1)
+        punct_post_preds = punct_post_probs.argmax(dim=-1)
+        seg_preds = seg_probs.ge(0.5)
+        cap_preds = cap_probs.ge(0.5)
+        self._test_metrics["punct_pre_report"](punct_pre_preds[punct_pre_mask], punct_pre_targets[punct_pre_mask])
+        self._test_metrics["punct_post_report"](punct_post_preds[punct_post_mask], punct_post_targets[punct_post_mask])
+        self._test_metrics["cap_report"](cap_preds, cap_targets[cap_mask])
+        self._test_metrics["seg_report"](seg_preds[seg_mask], seg_targets[seg_mask])
 
     def _get_language_for_dl_idx(self, idx: int) -> str:
         ds: PunctCapSegDataset = self._validation_dl[idx].dataset
@@ -436,28 +417,14 @@ class PunctCapSegModel(NLPModel):
     #     self.multi_validation_epoch_end(outputs=outputs, dataloader_idx=0)
     #
     def test_epoch_end(self, outputs) -> None:
-        num_thresholds = len(self._test_metrics)
-        if num_thresholds > 1:
-            thresholds = torch.arange(num_thresholds) / (num_thresholds - 1)
-        else:
-            thresholds = None
         # Compute, reset, and log the precision/recall/f1 for punct/cap/seg for this threshold
         for analytic in ["punct_pre", "punct_post", "cap", "seg"]:
-            if thresholds is None:
-                precision, recall, f1, report = self._test_metrics[0][f"{analytic}_report"].compute()
-                self.log(f"test_{analytic}_precision", precision)
-                self.log(f"test_{analytic}_recall", recall)
-                self.log(f"test_{analytic}_f1", f1)
-                logging.info(f"{analytic} test report: {report}")
-            else:
-                # TODO messy and ad-hoc way to sweep thresholds
-                print(f"Table for {analytic}")
-                print(f"threshold\tprecision\trecall\tf1")
-                for i, metrics in enumerate(self._test_metrics):
-                    precision, recall, f1, report = metrics[f"{analytic}_report"].compute()
-                    threshold = thresholds[i]
-                    print(f"{threshold:0.2f}\t{precision:0.2f}\t{recall:0.2f}\t{f1:0.2f}")
-                    metrics[f"{analytic}_report"].reset()
+            precision, recall, f1, report = self._test_metrics[f"{analytic}_report"].compute()
+            self._test_metrics[f"{analytic}_report"].reset()
+            self.log(f"test_{analytic}_precision", precision)
+            self.log(f"test_{analytic}_recall", recall)
+            self.log(f"test_{analytic}_f1", f1)
+            logging.info(f"{analytic} test report: {report}")
 
     def multi_validation_epoch_end(self, outputs, dataloader_idx: int = 0) -> None:
         self._multi_eval_epoch_end(dataloader_idx)
@@ -479,9 +446,64 @@ class PunctCapSegModel(NLPModel):
             if dataloader.num_workers == 0:
                 dataloader.dataset.worker_init_fn(worker_id=0)
 
+    @property
+    def input_module(self):
+        return self
+
+    @property
+    def output_module(self):
+        return self
+
+    @property
+    def input_types(self) -> Optional[Dict[str, NeuralType]]:
+        return {
+            "input_ids": NeuralType(("B", "T"), ChannelType()),
+            "lengths": NeuralType(("B",), LengthsType()),
+            "punc_mask": NeuralType(("B", "T", "D"), MaskType()),
+        }
+
+    @property
+    def output_types(self) -> Optional[Dict[str, NeuralType]]:
+        return {
+            "punct_pre_logits": NeuralType(("B", "T", "C"), LogitsType()),
+            "punct_post_logits": NeuralType(("B", "T", "D", "C"), LogitsType()),  # D == max_subword_length
+            "cap_logits": NeuralType(("B", "T", "D"), LogitsType()),  # D == max_subword_length
+            "seg_logits": NeuralType(("B", "T", "C"), LogitsType()),  # C == 2
+        }
+
+    def input_example(
+        self, min_batch_size: int = 2, max_batch_size: int = 32, min_seq_length: int = 20, max_seq_length: int = 128,
+    ):
+        batch_size = torch.randint(low=min_batch_size, high=max_batch_size, size=[1]).item()
+        seq_length = torch.randint(low=min_seq_length, high=max_seq_length, size=[1]).item()
+        input_ids = torch.randint(size=[batch_size, seq_length], low=0, high=1000)
+        lengths = torch.randint(low=0, high=seq_length, size=[batch_size])
+        lengths[0] = seq_length
+        punc_mask = torch.randint(low=0, high=2, size=[batch_size, seq_length, self._max_token_len]).bool()
+        return input_ids, lengths, punc_mask
+
     @typecheck()
-    def forward(self, input_ids: torch.Tensor, lengths: torch.Tensor):
-        raise NotImplementedError()
+    def forward(self, input_ids: torch.Tensor, lengths: torch.Tensor, punc_mask: torch.Tensor):
+        """Intended for inference. For training/evaluation, use `run_step`"""
+        seq_mask = input_ids.ne(self.tokenizer.pad_id)
+        # [B, T, D]
+        encoded = self.bert_model(input_ids=input_ids, attention_mask=seq_mask, token_type_ids=None,)
+        # Some LMs will return a tuple
+        if isinstance(encoded, tuple):
+            encoded = encoded[0]
+
+        pre_logits, post_logits, cap_logits, seg_logits = self._decoder(
+            encoded=encoded, mask=seq_mask, punc_mask=punc_mask
+        )
+
+        # [B, T, max_token_len]
+        cap_probs = cap_logits.sigmoid()
+        # [B, T, 2]
+        seg_probs = seg_logits.softmax(dim=-1)[..., 1]
+        # Select the highest-scoring value. Set null index to very small value (in case it was 1.0)
+        pre_probs = pre_logits.softmax(dim=-1)
+        post_probs = post_logits.softmax(dim=-1)
+        return pre_probs, post_probs, cap_probs, seg_probs
 
     @classmethod
     def list_available_models(cls) -> Optional[PretrainedModelInfo]:
@@ -493,7 +515,7 @@ class PunctCapSegModel(NLPModel):
             input_file=config.get("input_file"),
             input_texts=config.get("texts"),
             max_length=config.get("max_length", self._max_length),
-            fold_overlap=config.get("fold_overlap", 8),
+            fold_overlap=config.get("fold_overlap", 16),
         )
         dataloader = torch.utils.data.DataLoader(
             dataset=dataset,
@@ -683,7 +705,6 @@ class PunctCapSegModel(NLPModel):
 
             # Select the highest-scoring value. Set null index to very small value (in case it was 1.0)
             pre_probs = pre_logits.softmax(dim=-1)
-            # pre_probs[..., self._null_punct_pre_index] = 1e-3
             all_pre_scores, all_pre_preds = pre_probs.max(dim=-1)
             all_pre_scores = self._unfold_tensors(
                 folded_tensor=all_pre_scores, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
@@ -693,7 +714,6 @@ class PunctCapSegModel(NLPModel):
             )
 
             post_probs = post_logits.softmax(dim=-1)
-            # post_probs[..., self._null_punct_post_index] = 1e-3
             all_post_scores, all_post_preds = post_probs.max(dim=-1)
             all_post_scores = self._unfold_tensors(
                 folded_tensor=all_post_scores, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices,
