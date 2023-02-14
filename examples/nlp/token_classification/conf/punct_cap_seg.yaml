@@ -1,12 +1,6 @@
 
 name: "punct_cap_seg"
-init_from_nemo_model:
-  model0:
-    path: /home/ubuntu/punct_post_f1_81.2040_last.nemo
-    exclude: [
-      "_decoder._seg_head",
-      "_decoder._cap_head",
-    ]
+init_from_nemo_model: /home/ubuntu/tmp.nemo
 
 model:
   # For reference only
@@ -65,13 +59,14 @@ model:
     cap_head_dropout: 0.1
     punct_head_dropout: 0.1
     seg_head_dropout: 0.1
-    cap_head_n_layers: 1
+    cap_head_n_layers: 2
+    cap_head_intermediate_dim: 128
     punct_head_n_layers: 1
     seg_head_n_layers: 1
     emb_dim: 4
     transformer_num_layers: 2
     transformer_inner_size: 2048
-    transformer_num_heads: 8
+    transformer_num_heads: 4
     transformer_ffn_dropout: 0.1
     post_punct_null_idx: 0  # TODO should be set by model
 
@@ -96,7 +91,7 @@ model:
     # Loss weights for punct_post_labels
     punct_post:
       # Weight for each positive example. Computed via `counts.pow(1/T).mean() / counts.pow(1/T)`. T is 5 here.
-      weight: [0.34, 0.74, 0.8, 1.03, 1.28, 1.64, 1.36, 1.81, 2.3, 1.37, 1.49, 1.2, 1.5, 1.5, 1.5, 1.5]
+      weight: [0.5, 0.74, 0.8, 1.03, 1.28, 1.64, 1.36, 1.81, 2.3, 1.37, 1.49, 1.2, 1.5, 1.5, 1.5, 1.5]
     # Loss weights for punct_pre_labels
     punct_pre:
       weight: [0.56, 2.0]
@@ -277,7 +272,7 @@ model:
 
   validation_ds:
     batch_size: 256
-    num_workers: 0
+    num_workers: 4
     # "common" options are analogous to train_ds
     common:
       punct_pre_labels: ${model.punct_pre_labels}
@@ -440,7 +435,7 @@ model:
 
   optim:
     name: adam
-    lr: 2e-5
+    lr: 1e-5
     sched:
       name: WarmupAnnealing
       min_lr: 1e-6

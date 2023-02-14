@@ -15,6 +15,7 @@ from nemo.collections.common.tokenizers import SentencePieceTokenizer
 from nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset import (
     InferencePunctCapSegDataset,
     PunctCapSegDataset,
+    NULL_PUNCT_TOKEN,
 )
 from nemo.collections.nlp.metrics.classification_report import ClassificationReport
 from nemo.collections.nlp.models.nlp_model import NLPModel
@@ -41,9 +42,8 @@ class PunctCapSegModel(NLPModel):
         self._punct_pre_token_to_index: Dict[str, int] = {token: i for i, token in enumerate(self._punct_pre_labels)}
         self._punct_post_token_to_index: Dict[str, int] = {token: i for i, token in enumerate(self._punct_post_labels)}
         # Resolve index of null token
-        self._null_punct_token: str = self._cfg.get("null_punct_token", "<NULL>")
-        self._null_punct_pre_index: int = self._punct_pre_token_to_index[self._null_punct_token]
-        self._null_punct_post_index: int = self._punct_post_token_to_index[self._null_punct_token]
+        self._null_punct_pre_index: int = self._punct_pre_token_to_index[NULL_PUNCT_TOKEN]
+        self._null_punct_post_index: int = self._punct_post_token_to_index[NULL_PUNCT_TOKEN]
 
         # Used for loss masking. Should by synchronized with data sets.
         self._ignore_idx: int = self._cfg.get("ignore_idx", -100)
@@ -63,7 +63,7 @@ class PunctCapSegModel(NLPModel):
         )
         # [B, T, num_post_punct, max_chars_per_subword]
         self._punct_post_loss: CrossEntropyLoss = CrossEntropyLoss(
-            weight=cfg.loss.punct_post.get("weight"), ignore_index=self._ignore_idx, logits_ndim=4
+            weight=cfg.loss.punct_post.get("weight"), ignore_index=self._ignore_idx, logits_ndim=3
         )
         # [B, T, 2] binary preds
         self._seg_loss: CrossEntropyLoss = CrossEntropyLoss(
@@ -260,14 +260,14 @@ class PunctCapSegModel(NLPModel):
 
         # Make a binary mask from the post punc targets
         punc_mask = punct_post_targets.ne(self._cfg.get("ignore_idx", -100))
+        punct_targets_for_decoder = punct_post_targets.masked_fill(~punc_mask, self._null_punct_post_index)
         # In training mode, always feed ground truth predictions to the heads.
         # For val, it's useful to use reference to not penalize the cap/seg heads for bad punctuation predictions when
         # selecting the best model.
         punct_logits_pre, punct_logits_post, cap_logits, seg_logits = self._decoder(
             encoded=encoded,
             mask=mask,
-            punc_mask=punc_mask,
-            punc_targets=None if testing else punct_post_targets,
+            punc_targets=None if testing else punct_targets_for_decoder,
             seg_targets=None if testing else seg_targets,
         )
 
@@ -466,7 +466,7 @@ class PunctCapSegModel(NLPModel):
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
         return {
             "punct_pre_logits": NeuralType(("B", "T", "C"), LogitsType()),
-            "punct_post_logits": NeuralType(("B", "T", "D", "C"), LogitsType()),  # D == max_subword_length
+            "punct_post_logits": NeuralType(("B", "T", "C"), LogitsType()),
             "cap_logits": NeuralType(("B", "T", "D"), LogitsType()),  # D == max_subword_length
             "seg_logits": NeuralType(("B", "T", "C"), LogitsType()),  # C == 2
         }
@@ -492,15 +492,13 @@ class PunctCapSegModel(NLPModel):
         if isinstance(encoded, tuple):
             encoded = encoded[0]
 
-        pre_logits, post_logits, cap_logits, seg_logits = self._decoder(
-            encoded=encoded, mask=seq_mask, punc_mask=punc_mask
-        )
+        pre_logits, post_logits, cap_logits, seg_logits = self._decoder(encoded=encoded, mask=seq_mask)
 
         # [B, T, max_token_len]
         cap_probs = cap_logits.sigmoid()
         # [B, T, 2]
         seg_probs = seg_logits.softmax(dim=-1)[..., 1]
-        # Select the highest-scoring value. Set null index to very small value (in case it was 1.0)
+        # Select the highest-scoring value.
         pre_probs = pre_logits.softmax(dim=-1)
         post_probs = post_logits.softmax(dim=-1)
         return pre_probs, post_probs, cap_probs, seg_probs
@@ -535,7 +533,7 @@ class PunctCapSegModel(NLPModel):
         overlap: int,
         use_scale: Optional[bool] = None,
         time_dim: int = 1,
-    ) -> List[List]:
+    ) -> List[torch.Tensor]:
         # Move everything to CPU
         folded_tensor = folded_tensor.cpu()
         lengths = lengths.cpu()
@@ -574,12 +572,12 @@ class PunctCapSegModel(NLPModel):
                         )
                     )
             # Always return lists, because this function is used after running model
-            unfolded_outputs.append(unfolded_tensor.tolist())
+            unfolded_outputs.append(unfolded_tensor)
         return unfolded_outputs
 
-    def _get_char_cap_preds(self, tokens: List[str], probs: List[List[float]], threshold: float) -> List[int]:
+    def _get_char_cap_preds(self, tokens: List[str], token_preds: List[List[int]]) -> List[int]:
         """Gathers character-level truecase predictions from subword predictions"""
-        preds: List[int] = []
+        char_preds: List[int] = []
         for token_num, token in enumerate(tokens):
             start = 0
             if self._using_sp:
@@ -588,13 +586,13 @@ class PunctCapSegModel(NLPModel):
             elif token.startswith("##"):
                 start = 2
             for char_num in range(start, len(token)):
-                score = probs[token_num][char_num]
-                preds.append(0 if score < threshold else 1)
-        return preds
+                pred = token_preds[token_num][char_num]
+                char_preds.append(pred)
+        return char_preds
 
-    def _get_char_seg_preds(self, tokens: List[str], probs: List[float], threshold: float) -> List[int]:
+    def _get_char_seg_preds(self, tokens: List[str], token_preds: List[int]) -> List[int]:
         """Gathers character-level sentence boundary predictions from subword predictions"""
-        preds: List[int] = []
+        char_preds: List[int] = []
         current_char = 0
         for token_num, token in enumerate(tokens):
             # Find out how many input chars this subtoken consumes
@@ -607,13 +605,11 @@ class PunctCapSegModel(NLPModel):
                     token_len = len(token) - 2
             # Advance to the end of this char
             current_char += token_len
-            if probs[token_num] >= threshold:
-                preds.append(current_char)
-        return preds
+            if token_preds[token_num] == 1:
+                char_preds.append(current_char)
+        return char_preds
 
-    def _get_char_punct_pre_preds(
-        self, tokens: List[str], probs: List[float], preds: List[int], threshold: float
-    ) -> Dict[int, str]:
+    def _get_char_punct_preds(self, tokens: List[str], token_preds: List[int], post: bool) -> Dict[int, str]:
         """Gathers subtoken-level pre-punctuation predictions"""
         # one per character, for alignment purposes. Since these are mostly null, use a dict to specify non-null indices
         output_preds: Dict[int, str] = {}
@@ -627,47 +623,22 @@ class PunctCapSegModel(NLPModel):
             else:
                 if token.startswith("##"):
                     token_len = len(token) - 2
-            score = probs[token_num]
-            if score >= threshold:
-                pred = preds[token_num]
+            pred = token_preds[token_num]
+            if post:
+                label = self._punct_post_labels[pred]
+            else:
                 label = self._punct_pre_labels[pred]
-                output_preds[current_char] = label
-            # Advance to the end of this char
-            current_char += token_len
+            if post:
+                current_char += token_len
+            if label != NULL_PUNCT_TOKEN:
+                output_preds[current_char - (1 if post else 0)] = label
+            if not post:
+                current_char += token_len
         return output_preds
-
-    def _get_char_punct_post_preds(
-        self, tokens: List[str], probs: List[List[float]], preds: List[List[int]], threshold: float,
-    ) -> List[str]:
-        """Gathers character-level punctuation predictions from subword predictions"""
-        char_preds: List[str] = []
-        for token_num, token in enumerate(tokens):
-            start = 0
-            if self._using_sp:
-                if token.startswith("▁"):
-                    start = 1
-            elif token.startswith("##"):
-                start = 2
-            for char_num in range(start, len(token)):
-                score = probs[token_num][char_num]
-                if score >= threshold:
-                    pred = preds[token_num][char_num]
-                    label = self._punct_post_labels[pred]
-                    char_preds.append(label)
-                else:
-                    char_preds.append(self._cfg.null_punct_token)
-        return char_preds
 
     @torch.inference_mode()
     def infer(
-        self,
-        texts: List[str],
-        cap_threshold: float = 0.5,
-        seg_threshold: float = 0.5,
-        punct_threshold: float = 0.5,
-        fold_overlap: int = 20,
-        batch_size: int = 32,
-        max_length: Optional[int] = None,
+        self, texts: List[str], fold_overlap: int = 20, batch_size: int = 32, max_length: Optional[int] = None,
     ) -> List[List[str]]:
         in_mode = self.training
         self.eval()
@@ -679,7 +650,7 @@ class PunctCapSegModel(NLPModel):
         )
         out_texts: List[List[str]] = []
         for batch in dataloader:
-            folded_input_ids, folded_batch_indices, lengths, punc_mask = batch
+            folded_input_ids, folded_batch_indices, lengths = batch
             mask = folded_input_ids.ne(self.tokenizer.pad_id)
             # [B, T, D]
             encoded = self.bert_model(input_ids=folded_input_ids, attention_mask=mask, token_type_ids=None,)
@@ -687,66 +658,47 @@ class PunctCapSegModel(NLPModel):
             if isinstance(encoded, tuple):
                 encoded = encoded[0]
 
-            pre_logits, post_logits, cap_logits, seg_logits = self._decoder(
-                encoded=encoded, mask=mask, punc_mask=punc_mask
-            )
+            pre_logits, post_logits, cap_logits, seg_logits = self._decoder(encoded=encoded, mask=mask)
 
             # [B, T, max_token_len]
-            all_cap_scores = cap_logits.sigmoid()
-            all_cap_scores = self._unfold_tensors(
-                folded_tensor=all_cap_scores, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
+            cap_probs = cap_logits.sigmoid()
+            cap_probs_list: List[torch.Tensor] = self._unfold_tensors(
+                folded_tensor=cap_probs, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
             )
 
             # [B, T, 2]
-            all_seg_scores = seg_logits.softmax(dim=-1)[..., 1]
-            all_seg_scores = self._unfold_tensors(
-                folded_tensor=all_seg_scores, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
+            seg_probs = seg_logits.softmax(dim=-1)[..., 1]
+            seg_probs_list: List[torch.Tensor] = self._unfold_tensors(
+                folded_tensor=seg_probs, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
             )
 
             # Select the highest-scoring value. Set null index to very small value (in case it was 1.0)
             pre_probs = pre_logits.softmax(dim=-1)
-            all_pre_scores, all_pre_preds = pre_probs.max(dim=-1)
-            all_pre_scores = self._unfold_tensors(
-                folded_tensor=all_pre_scores, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
-            )
-            all_pre_preds = self._unfold_tensors(
-                folded_tensor=all_pre_preds, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
+            pre_probs_list: List[torch.Tensor] = self._unfold_tensors(
+                folded_tensor=pre_probs, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
             )
 
             post_probs = post_logits.softmax(dim=-1)
-            all_post_scores, all_post_preds = post_probs.max(dim=-1)
-            all_post_scores = self._unfold_tensors(
-                folded_tensor=all_post_scores, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices,
-            )
-            all_post_preds = self._unfold_tensors(
-                folded_tensor=all_post_preds, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
+            post_probs_list: List[torch.Tensor] = self._unfold_tensors(
+                folded_tensor=post_probs, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices,
             )
 
-            unfolded_input_ids = self._unfold_tensors(
+            input_ids_list: List[torch.Tensor] = self._unfold_tensors(
                 folded_tensor=folded_input_ids, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
             )
-            for batch_idx, ids in enumerate(unfolded_input_ids):
+            for batch_idx, ids in enumerate(input_ids_list):
+                ids = ids.tolist()
                 tokens = self.tokenizer.ids_to_tokens(ids)
+                cap_preds: List[List[int]] = cap_probs_list[batch_idx].gt(0.5).tolist()
+                seg_preds: List[int] = seg_probs_list[batch_idx].gt(0.5).tolist()
+                pre_preds: List[int] = pre_probs_list[batch_idx].argmax(dim=-1).tolist()
+                post_preds: List[int] = post_probs_list[batch_idx].argmax(dim=-1).tolist()
 
                 input_text = self.tokenizer.ids_to_text(ids)
-                cap_char_preds = self._get_char_cap_preds(
-                    tokens=tokens, probs=all_cap_scores[batch_idx], threshold=cap_threshold,
-                )
-                post_tokens = self._get_char_punct_post_preds(
-                    tokens=tokens,
-                    probs=all_post_scores[batch_idx],
-                    preds=all_post_preds[batch_idx],
-                    threshold=punct_threshold,
-                )
-                pre_tokens = self._get_char_punct_pre_preds(
-                    tokens=tokens,
-                    probs=all_pre_scores[batch_idx],
-                    preds=all_pre_preds[batch_idx],
-                    threshold=punct_threshold,
-                )
-                break_points = self._get_char_seg_preds(
-                    tokens=tokens, probs=all_seg_scores[batch_idx], threshold=seg_threshold,
-                )
+                cap_char_preds = self._get_char_cap_preds(tokens=tokens, token_preds=cap_preds)
+                post_tokens = self._get_char_punct_preds(tokens=tokens, token_preds=post_preds, post=True)
+                pre_tokens = self._get_char_punct_preds(tokens=tokens, token_preds=pre_preds, post=False)
+                break_points = self._get_char_seg_preds(tokens=tokens, token_preds=seg_preds)
 
                 segmented_texts: List[str] = []
                 output_chars: List[str] = []
@@ -759,16 +711,15 @@ class PunctCapSegModel(NLPModel):
                     # Maybe add punctuation before this char
                     if non_whitespace_index in pre_tokens:
                         pre_token = pre_tokens[non_whitespace_index]
-                        if pre_token != self._cfg.null_punct_token:
-                            output_chars.append(pre_token)
+                        output_chars.append(pre_token)
                     # Append true-cased input char to output
                     if cap_char_preds[non_whitespace_index] == 1:
                         output_chars.append(input_char.upper())
                     else:
                         output_chars.append(input_char.lower())
                     # Maybe add punctuation after this char
-                    post_token = post_tokens[non_whitespace_index]
-                    if post_token != self._cfg.null_punct_token:
+                    if non_whitespace_index in post_tokens:
+                        post_token = post_tokens[non_whitespace_index]
                         output_chars.append(post_token)
                     # Maybe split sentence on this char
                     if break_points and break_points[0] == non_whitespace_index + 1:

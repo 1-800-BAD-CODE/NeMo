@@ -10,6 +10,9 @@ from nemo.core import Dataset, typecheck
 from nemo.core.neural_types import ChannelType, IntType, LengthsType, NeuralType, LabelsType, MaskType
 from nemo.utils import logging
 
+# Use this everywhere, to make it easy.
+NULL_PUNCT_TOKEN = "<NULL>"
+
 
 class InferencePunctCapSegDataset(Dataset):
     """
@@ -59,7 +62,6 @@ class InferencePunctCapSegDataset(Dataset):
             "folded_input_ids": NeuralType(("B", "T"), ChannelType()),
             "folded_batch_ids": NeuralType(("B",), IntType()),
             "lengths": NeuralType(("B",), LengthsType()),
-            "punc_mask": NeuralType(("B", "T", "D"), MaskType()),  # D == max_subtoken_len
         }
 
     def __len__(self):
@@ -95,21 +97,10 @@ class InferencePunctCapSegDataset(Dataset):
         ids_tensor = torch.full(
             size=[lengths.shape[0], lengths.max()], dtype=torch.long, fill_value=self._tokenizer.pad_id  # noqa
         )
-        punc_mask = torch.zeros(size=[lengths.shape[0], lengths.max(), self._max_subword_length])
         for batch_idx, ids in enumerate(out_input_ids):
             ids_tensor[batch_idx, : len(ids)] = torch.tensor(ids)
-            tokens = self._tokenizer.ids_to_tokens(ids[1:-1])
-            for token_idx, token in enumerate(tokens):
-                start = 0
-                if self._using_sp:
-                    if token.startswith("▁"):
-                        start = 1
-                elif token.startswith("##"):
-                    start = 2
-                # Offset by one because sequences have BOS
-                punc_mask[batch_idx, token_idx + 1, start : len(token) + 1] = 1
 
-        return ids_tensor, lengths, batch_ids, punc_mask
+        return ids_tensor, lengths, batch_ids
 
     @typecheck()
     def collate_fn(self, batch):
@@ -123,8 +114,8 @@ class InferencePunctCapSegDataset(Dataset):
                 the original input texts.
         """
         all_ids: List[List[int]] = [x[0] for x in batch]
-        input_ids, lengths, batch_ids, punc_mask = self._fold_batch(all_ids)
-        return input_ids, batch_ids, lengths, punc_mask
+        input_ids, lengths, batch_ids = self._fold_batch(all_ids)
+        return input_ids, batch_ids, lengths
 
 
 class PunctCapSegDataset(Dataset):
@@ -198,8 +189,8 @@ class PunctCapSegDataset(Dataset):
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
         return {
             "input_ids": NeuralType(("B", "T"), ChannelType()),
-            "punc_pre_target_ids": NeuralType(("B", "T",), LabelsType()),  # D == num_pre_punct_tokens
-            "punc_post_target_ids": NeuralType(("B", "T", "D"), LabelsType()),  # D == max_subtoken_len
+            "punc_pre_target_ids": NeuralType(("B", "T",), LabelsType()),
+            "punc_post_target_ids": NeuralType(("B", "T",), LabelsType()),
             "cap_target_ids": NeuralType(("B", "T", "D"), LabelsType()),  # D == max_subtoken_len
             "seg_target_ids": NeuralType(("B", "T"), LabelsType()),
             "lengths": NeuralType(("B",), LengthsType()),
@@ -224,13 +215,14 @@ class PunctCapSegDataset(Dataset):
             all_targets.append(token_targets)
         return all_targets
 
-    def _select_pre_punct_token_targets(self, tokens: List[str], char_level_targets: List[int]) -> List[int]:
+    def _char_targets_to_token_targets(self, tokens: List[str], char_targets: List[int], apply_post: bool) -> List[int]:
         all_targets: List[int] = []
         # For each token, make one output list
         char_index = 0
         for token in tokens:
-            # Keep only the target for the first character of this subword
-            all_targets.append(char_level_targets[char_index])
+            if not apply_post:
+                # Keep only the target for the first character of this subword
+                all_targets.append(char_targets[char_index])
             # Fast-forward to skip the rest of this tokens characters
             num_chars_in_token = len(token)
             if self._using_sp:
@@ -239,6 +231,9 @@ class PunctCapSegDataset(Dataset):
             elif token.startswith("##"):
                 num_chars_in_token -= 2
             char_index += num_chars_in_token
+            if apply_post:
+                # Keep only the target for the last character of this subword
+                all_targets.append(char_targets[char_index - 1])
         return all_targets
 
     @typecheck()
@@ -258,9 +253,7 @@ class PunctCapSegDataset(Dataset):
 
         # Create empty target tensors and fill non-padded regions
         punct_pre_targets = torch.full(size=[batch_size, lengths.max()], fill_value=self._target_pad_value)
-        punct_post_targets = torch.full(
-            size=[batch_size, lengths.max(), self._max_token_len], fill_value=self._target_pad_value
-        )
+        punct_post_targets = torch.full(size=[batch_size, lengths.max()], fill_value=self._target_pad_value)
         cap_targets = torch.full(
             size=[batch_size, lengths.max(), self._max_token_len], fill_value=self._target_pad_value
         )
@@ -268,7 +261,7 @@ class PunctCapSegDataset(Dataset):
         for i in range(batch_size):
             cap_targets[i, : lengths[i], :] = cap_targets_list[i]
             seg_targets[i, : lengths[i]] = seg_targets_list[i]
-            punct_post_targets[i, : lengths[i], :] = punct_post_targets_list[i]
+            punct_post_targets[i, : lengths[i]] = punct_post_targets_list[i]
             punct_pre_targets[i, : lengths[i]] = punct_pre_targets_list[i]
 
         return input_ids, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, lengths
@@ -283,19 +276,15 @@ class PuncTargetsGenerator(abc.ABC):
     Args:
         post_labels: Punctuation labels that can appear after subwords.
         pre_labels: Punctuation labels that can appear before subwords.
-        null_label: The string value of the "null" label, or the label that means "no punctuation here".
     """
 
-    def __init__(
-        self, post_labels: List[str], pre_labels: List[str], null_label: str = "<NULL>", ignore_index: int = -100,
-    ) -> None:
-        self._null_label = null_label
+    def __init__(self, post_labels: List[str], pre_labels: List[str], ignore_index: int = -100,) -> None:
         self._ignore_index = ignore_index
 
         self._pre_label_to_index = {label: i for i, label in enumerate(pre_labels)}
         self._post_label_to_index = {label: i for i, label in enumerate(post_labels)}
-        self._pre_null_index = self._pre_label_to_index[null_label]
-        self._post_null_index = self._post_label_to_index[null_label]
+        self._pre_null_index = self._pre_label_to_index[NULL_PUNCT_TOKEN]
+        self._post_null_index = self._post_label_to_index[NULL_PUNCT_TOKEN]
         # Save as set for quick membership check
         self._pre_labels = set(pre_labels)
         self._post_labels = set(post_labels)
@@ -464,7 +453,6 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         punct_post_labels: List of punctuation tokens that can appear after subwords.
         tokenizer: TokenizerSpec to use to tokenize the data. Can be set later, for NLP models with forced
             initialization order.
-        null_label: The string value of the "null" token, or the token that means "no punctuation here".
         max_length: Maximum length of any input.
         max_lines_per_eg: Uniformly choose between 1 and this many lines to use per example.
         prob_truncate: Truncate examples with this probability.
@@ -482,11 +470,10 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         punct_post_labels: List[str],
         is_continuous: Optional[bool] = None,
         tokenizer: Optional[TokenizerSpec] = None,
-        null_label: str = "<NULL>",
         max_length: int = 512,
         min_lines_per_eg: int = 1,
         max_lines_per_eg: int = 4,
-        prob_truncate: float = 0.2,
+        prob_truncate: float = 0.0,
         truncate_max_tokens: int = 5,
         truncate_percentage: float = 0.0,
         target_pad_value: int = -100,
@@ -501,7 +488,6 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
             is_continuous=is_continuous,
         )
         self._text_files = [text_files] if isinstance(text_files, str) else text_files
-        self._null_label = null_label
         self._max_length = max_length
         self._punct_pre_labels = punct_pre_labels
         self._punct_post_labels = punct_post_labels
@@ -606,10 +592,14 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         seg_targets = [pad] + seg_targets + [pad]
         cap_targets = pad_list + cap_targets + pad_list
 
-        punct_pre_targets = self._select_pre_punct_token_targets(input_tokens, punct_pre_target_indices)
+        punct_pre_targets = self._char_targets_to_token_targets(
+            input_tokens, punct_pre_target_indices, apply_post=False
+        )
         punct_pre_targets = [pad] + punct_pre_targets + [pad]
-        punct_post_targets = self._fold_char_targets(input_tokens, punct_post_target_indices)
-        punct_post_targets = pad_list + punct_post_targets + pad_list
+        punct_post_targets = self._char_targets_to_token_targets(
+            input_tokens, punct_post_target_indices, apply_post=True
+        )
+        punct_post_targets = [pad] + punct_post_targets + [pad]
 
         # Convert to Tensors.
         punct_pre_targets_tensor = torch.tensor(punct_pre_targets, dtype=torch.long)
