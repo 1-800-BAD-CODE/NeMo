@@ -544,6 +544,8 @@ class PunctCapSegModel(NLPModel):
         scale: Optional[torch.Tensor] = None
         if use_scale:
             scale = torch.linspace(0, np.pi / 2, overlap).cos().unsqueeze(0)
+            if scale.dim() < folded_tensor.dim():
+                scale = scale.unsqueeze(-1)
 
         unfolded_outputs: List = []
         # For each unfolded batch index, find all subsegments

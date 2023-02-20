@@ -86,11 +86,10 @@ class PunctCapSegDecoder(NeuralModule):
     @property
     def input_types(self) -> Optional[Dict[str, NeuralType]]:
         """
-        When training, the reference punctuation targets are used to condition the true-casing and sentence-boundary
-        heads.
+        When training, the reference punctuation targets are used to condition the other classifiers. This is needed to
+        ensure the targets align with the input to prevent the heads from ignoring the (sometimes incorrect)
+        punctuation predictions.
 
-        During inference, the model uses the punctuation predictions. In this case, we need a mask to know the length
-        of each subword, to ignore padded character positions within the punctuation predictions.
         """
         return {
             "encoded": NeuralType(("B", "T", "D"), ChannelType()),
@@ -132,7 +131,7 @@ class PunctCapSegDecoder(NeuralModule):
 
 
 class LinearPunctCapSegDecoder(PunctCapSegDecoder):
-    """
+    """Simple decoder with unconditional classifiers.
 
 
     """
@@ -211,9 +210,7 @@ class LinearPunctCapSegDecoder(PunctCapSegDecoder):
 
 
 class MHAPunctCapSegDecoder(PunctCapSegDecoder):
-    """
-    Decoder with multi-headed attention to condition the true-casing and sentence-boundary heads with the punctuation
-    predictions.
+    """Decoder with multi-headed attention to utilize punctuation to condition the other classifiers.
     """
 
     def __init__(
@@ -258,7 +255,7 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
             num_classes=punct_num_classes_post,
         )
         self._punct_head_pre: ClassificationHead = ClassificationHead(
-            encoded_dim=encoder_dim,
+            encoded_dim=self._encoder_hidden_dim,
             num_layers=punct_head_n_layers,
             dropout=punct_head_dropout,
             activation="relu",
@@ -300,8 +297,6 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
     ):
         # [B, T, C * max_token_len]
         punct_logits_post = self._punct_head_post(encoded=encoded)
-        # [B, T, C]
-        punct_logits_pre = self._punct_head_pre(encoded=encoded)
 
         # At training time, we get the reference punctuation targets to teacher-force the other heads.
         # At inference time, use the model's predictions.
@@ -311,13 +306,14 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
             punc_targets = punct_logits_post.argmax(dim=-1)
         # [B, T, emb_dim]
         embs = self._punct_emb(punc_targets)
-        # Stack the embeddings
+        # Concatenate the punctuation embeddings to the input and re-encode
         # [B, T, D + emb_dim]
-        cap_seg_encoder_input = torch.cat((encoded, embs), dim=-1)
-
-        cap_seg_encoded = self._cap_seg_encoder(encoder_states=cap_seg_encoder_input, encoder_mask=mask)
+        encoded_with_embs = torch.cat((encoded, embs), dim=-1)
+        re_encoded = self._cap_seg_encoder(encoder_states=encoded_with_embs, encoder_mask=mask)
+        # [B, T, C]
+        punct_logits_pre = self._punct_head_pre(encoded=re_encoded)
         # [B, T, 2]
-        seg_logits = self._seg_head(encoded=cap_seg_encoded)
+        seg_logits = self._seg_head(encoded=re_encoded)
 
         # In inference mode, generate the sentence boundary predictions
         if seg_targets is None:
@@ -333,7 +329,7 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         # [B, T] -> [B, T, 1]
         seg_targets = seg_targets.unsqueeze(-1)
         # Concatenate the shifted sentence boundary predictions for the truecase head
-        cap_head_input = torch.cat((cap_seg_encoded, seg_targets), dim=-1)
+        cap_head_input = torch.cat((re_encoded, seg_targets), dim=-1)
         # [B, T, max_subword_len]
         cap_logits = self._cap_head(encoded=cap_head_input)
 
