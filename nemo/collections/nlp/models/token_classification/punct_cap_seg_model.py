@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from hydra.utils import instantiate
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, open_dict, OmegaConf
 from pytorch_lightning import Trainer
 
 from nemo.collections.common.data import ConcatMapDataset
@@ -101,6 +101,107 @@ class PunctCapSegModel(NLPModel):
         self._train_metrics: nn.ModuleDict = self._setup_metrics()
         # module list of module dict
         self._test_metrics: nn.ModuleDict = self._setup_metrics()
+
+    def register_bert_model(self):
+        # Base class implementation is buggy and unnecessary for non-Riva users... disable it.
+        pass
+
+    def maybe_init_from_pretrained_checkpoint(self, cfg: DictConfig, map_location: str = "cpu"):
+        orig = self.bert_model.config.max_position_embeddings
+        if cfg.get("init_from_nemo_model") is not None:
+            restored_model: PunctCapSegModel
+            with open_dict(cfg):
+                if isinstance(cfg.init_from_nemo_model, str):
+                    model_path = cfg.init_from_nemo_model
+                    restored_model = self.restore_from(
+                        model_path, map_location=map_location, strict=cfg.get("init_strict", True)  # noqa
+                    )
+                    self.load_state_dict(restored_model.state_dict(), strict=False)
+                    logging.info(f"Model checkpoint restored from nemo file with path : `{model_path}`")
+                elif isinstance(cfg.init_from_nemo_model, (DictConfig, dict)):
+                    for model_load_cfg in cfg.init_from_nemo_model.values():
+                        model_path = model_load_cfg.path
+                        restored_model = self.restore_from(
+                            model_path, map_location=map_location, strict=cfg.get("init_strict", True)  # noqa
+                        )
+                        self.load_part_of_state_dict(
+                            state_dict=restored_model.state_dict(),
+                            include=model_load_cfg.pop("include", [""]),
+                            exclude=model_load_cfg.pop("exclude", []),
+                            load_from_string=f"nemo file with path `{model_path}`",
+                        )
+                else:
+                    raise TypeError("Invalid type: init_from_nemo_model is not a string or a dict!")
+            # The rest of this function restores weights for certain layers that can change shape (embs, labels) or
+            # be shuffled (vocab)
+            with torch.inference_mode():
+                # If "post" punctuation differs, transfer as many weights as possible
+                if self._punct_post_labels != restored_model._punct_post_labels:
+                    old_label_to_idx: Dict[str, int] = {
+                        label: idx for idx, label in enumerate(restored_model._punct_post_labels)
+                    }
+                    # This assumes some things about the decoder architecture
+                    old_weight = restored_model._decoder._punct_head_post._linears[0].weight
+                    old_bias = restored_model._decoder._punct_head_post._linears[0].weight
+                    for i, label in self._punct_post_labels:
+                        if label in old_label_to_idx:
+                            old_idx = old_label_to_idx[label]
+                            self._decoder._punct_head_post._linears[0].weight[i] = old_weight[old_idx]
+                            self._decoder._punct_head_post._linears[0].bias[i] = old_bias[old_idx]
+                    # old_weight = restored_model._decoder._punct_head_post._linears
+                # If "pre" punctuation differs, transfer as many weights as possible
+                if self._punct_pre_labels != restored_model._punct_pre_labels:
+                    # Probably won't ever happen
+                    pass
+                # Mess with the embeddings
+                """
+                >>> m.bert_model.embeddings
+                BertEmbeddings(
+                  (word_embeddings): Embedding(64000, 512, padding_idx=0)
+                  (position_embeddings): Embedding(128, 512)
+                  (token_type_embeddings): Embedding(1, 512)
+                  (LayerNorm): LayerNorm((512,), eps=1e-12, elementwise_affine=True)
+                  (dropout): Dropout(p=0.1, inplace=False)
+                )
+                """
+                # Check if vocab differs. Transfer embeddings for as many tokens as possible
+                if self.tokenizer.vocab != restored_model.tokenizer.vocab:
+                    num_embeddings_restored = 0
+                    old_token_to_idx: Dict[str, int] = {
+                        token: idx for idx, token in enumerate(restored_model.tokenizer.vocab)
+                    }
+                    for i, token in self.tokenizer.vocab:
+                        # We'll try to find this token, or a similar token, in the old vocab
+                        old_idx: Optional[int]
+                        if token in old_token_to_idx:
+                            # Exact token match
+                            old_idx = old_token_to_idx[token]
+                        elif token.startswith("▁"):
+                            # See if BOW token exists as an inter-word piece
+                            old_idx = old_token_to_idx.get(token[1:])
+                        else:
+                            # Check if token exists as BOW piece
+                            old_idx = old_token_to_idx.get(f"▁{token}")
+                        if old_idx is not None:
+                            self.bert_model.embeddings.word_embeddings.weight[
+                                old_idx
+                            ] = restored_model.bert_model.embeddings.word_embeddings.weight[old_idx]
+                            num_embeddings_restored += 1
+                    vocab_size = len(self.tokenizer.vocab)
+                    pct = num_embeddings_restored / vocab_size
+                    logging.info(f"Restored {num_embeddings_restored} of {vocab_size} ({pct:0.2%}) of token embeddings")
+                # Check if positional embeddings dim differ. Should skip this is embeddings are not learned.
+                restored_max_len = restored_model.bert_model.embeddings.position_embeddings.weight.shape[0]
+                new_max_len = self.bert_model.embeddings.position_embeddings.weight.shape[0]
+                if new_max_len != restored_max_len:
+                    logging.info(f"Restoring positional embeddings from {restored_max_len} to {new_max_len}")
+                    for i in range(new_max_len):
+                        # If old model had fewer positions, extend the final embedding
+                        old_idx = min(i, restored_max_len - 1)
+                        self.bert_model.embeddings.position_embeddings.weight[
+                            i
+                        ] = restored_model.bert_model.embeddings.position_embeddings.weight[old_idx].clone()
+            del restored_model
 
     def setup_multiple_validation_data(self, val_data_config: Union[DictConfig, Dict]):
         self.setup_validation_data(val_data_config)
@@ -458,17 +559,15 @@ class PunctCapSegModel(NLPModel):
     def input_types(self) -> Optional[Dict[str, NeuralType]]:
         return {
             "input_ids": NeuralType(("B", "T"), ChannelType()),
-            "lengths": NeuralType(("B",), LengthsType()),
-            "punc_mask": NeuralType(("B", "T", "D"), MaskType()),
         }
 
     @property
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
         return {
-            "punct_pre_logits": NeuralType(("B", "T", "C"), LogitsType()),
-            "punct_post_logits": NeuralType(("B", "T", "C"), LogitsType()),
-            "cap_logits": NeuralType(("B", "T", "D"), LogitsType()),  # D == max_subword_length
-            "seg_logits": NeuralType(("B", "T", "C"), LogitsType()),  # C == 2
+            "pre_preds": NeuralType(("B", "T", "C"), LogitsType()),
+            "post_preds": NeuralType(("B", "T", "C"), LogitsType()),
+            "cap_preds": NeuralType(("B", "T", "D"), LogitsType()),  # D == max_subword_length
+            "seg_preds": NeuralType(("B", "T"), LogitsType()),  # C == 2
         }
 
     def input_example(
@@ -477,13 +576,11 @@ class PunctCapSegModel(NLPModel):
         batch_size = torch.randint(low=min_batch_size, high=max_batch_size, size=[1]).item()
         seq_length = torch.randint(low=min_seq_length, high=max_seq_length, size=[1]).item()
         input_ids = torch.randint(size=[batch_size, seq_length], low=0, high=1000)
-        lengths = torch.randint(low=0, high=seq_length, size=[batch_size])
-        lengths[0] = seq_length
-        punc_mask = torch.randint(low=0, high=2, size=[batch_size, seq_length, self._max_token_len]).bool()
-        return input_ids, lengths, punc_mask
+        # Note: we don't use lengths because it can be inferred from where the input_ids == the tokenizer pad ID
+        return input_ids
 
     @typecheck()
-    def forward(self, input_ids: torch.Tensor, lengths: torch.Tensor, punc_mask: torch.Tensor):
+    def forward(self, input_ids: torch.Tensor):
         """Intended for inference. For training/evaluation, use `run_step`"""
         seq_mask = input_ids.ne(self.tokenizer.pad_id)
         # [B, T, D]
@@ -495,13 +592,12 @@ class PunctCapSegModel(NLPModel):
         pre_logits, post_logits, cap_logits, seg_logits = self._decoder(encoded=encoded, mask=seq_mask)
 
         # [B, T, max_token_len]
-        cap_probs = cap_logits.sigmoid()
-        # [B, T, 2]
-        seg_probs = seg_logits.softmax(dim=-1)[..., 1]
-        # Select the highest-scoring value.
-        pre_probs = pre_logits.softmax(dim=-1)
-        post_probs = post_logits.softmax(dim=-1)
-        return pre_probs, post_probs, cap_probs, seg_probs
+        cap_preds = cap_logits.sigmoid().gt(0.5)
+        # [B, T]
+        seg_preds = seg_logits.softmax(dim=-1)[..., 1].gt(0.5)
+        _, pre_preds = pre_logits.max(dim=-1)
+        _, post_preds = post_logits.max(dim=-1)
+        return pre_preds, post_preds, cap_preds, seg_preds
 
     @classmethod
     def list_available_models(cls) -> Optional[PretrainedModelInfo]:
@@ -661,7 +757,6 @@ class PunctCapSegModel(NLPModel):
                 encoded = encoded[0]
 
             pre_logits, post_logits, cap_logits, seg_logits = self._decoder(encoded=encoded, mask=mask)
-
             # [B, T, max_token_len]
             cap_probs = cap_logits.sigmoid()
             cap_probs_list: List[torch.Tensor] = self._unfold_tensors(
@@ -676,6 +771,7 @@ class PunctCapSegModel(NLPModel):
 
             # Select the highest-scoring value. Set null index to very small value (in case it was 1.0)
             pre_probs = pre_logits.softmax(dim=-1)
+            # print(pre_probs[..., 1])
             pre_probs_list: List[torch.Tensor] = self._unfold_tensors(
                 folded_tensor=pre_probs, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
             )
