@@ -1,15 +1,14 @@
-
 name: "punct_cap_seg"
 init_from_nemo_model: /home/ubuntu/tmp.nemo
 
 model:
   # For reference only
   supported_languages: [
-      "af", "am", "ar", "bg", "bn", "de", "el", "en", "es", "et",
-      "fa", "fi", "fr", "gu", "hi", "hr", "hu", "id", "is", "it",
-      "ja", "kk", "kn", "ko", "ky", "lt", "lv", "mk", "ml", "mr",
-      "nl", "or", "pa", "pl", "ps", "pt", "ro", "ru", "rw", "so",
-      "sr", "sw", "ta", "te", "tr", "uk", "zh"
+    "af", "am", "ar", "bg", "bn", "de", "el", "en", "es", "et",
+    "fa", "fi", "fr", "gu", "hi", "hr", "hu", "id", "is", "it",
+    "ja", "kk", "kn", "ko", "ky", "lt", "lv", "mk", "ml", "mr",
+    "nl", "or", "pa", "pl", "ps", "pt", "ro", "ru", "rw", "so",
+    "sr", "sw", "ta", "te", "tr", "uk", "zh"
   ]
   # Print dev metrics to stdout during training for these languages
   log_val_metrics_for:
@@ -72,35 +71,35 @@ model:
 
   null_punct_token: "<NULL>"
   # Punctuation tokens that are predicted before each subword. Add "¡" here if using it.
-  punct_pre_labels: ["<NULL>", "¿",]
+  punct_pre_labels: [ "<NULL>", "¿", ]
   # Punctuation tokens that are predicted after each subword. Note the datasets below are configured to map the Chinese
   # enumeration comma to a regular Chinese comma, due to inconsistencies in the raw data, so it is not learned.
   punct_post_labels: [
-      "<NULL>",
-      ".", ",", "?",
-      "？", "，", "。", # Chinese, no enum comma
-      "、", "・",  # Japanese comma, middle dot
-      "।", # Hindi
-      "؟", "،",  # Arabic
-      ";",  # Greek question mark
-      "።", "፣", "፧"  # Amharic full stop, comma, question
-    ]
+    "<NULL>", "<ACRONYM>",
+    ".", ",", "?",
+    "？", "，", "。", # Chinese, no enum comma
+    "、", "・",  # Japanese comma, middle dot
+    "।", # Hindi
+    "؟", "،",  # Arabic
+    ";",  # Greek question mark
+    "።", "፣", "፧",  # Amharic full stop, comma, question
+  ]
   loss:
     # Loss weights for [pre_punct, post_punct, cap, seg]
-    agg_loss_weights: [1, 1, 1, 1]
+    agg_loss_weights: [ 1, 1, 1, 1 ]
     # Loss weights for punct_post_labels
     punct_post:
       # Weight for each positive example. Computed via `counts.pow(1/T).mean() / counts.pow(1/T)`. T is 5 here.
-      weight: [0.5, 0.74, 0.8, 1.03, 1.28, 1.64, 1.36, 1.81, 2.3, 1.37, 1.49, 1.2, 1.5, 1.5, 1.5, 1.5]
+      weight: [ 0.3, 2.0, 0.74, 0.8, 1.03, 1.28, 1.64, 1.36, 1.81, 2.3, 1.37, 1.49, 1.2, 1.5, 1.5, 1.5, 1.5 ]
     # Loss weights for punct_pre_labels
     punct_pre:
-      weight: [0.56, 2.0]
+      weight: [ 0.56, 2.0 ]
     # Loss weights for [lower_case, upper_case]
     cap:
       weight: 1.0  # BCE - only positive class weight
     # Loss weights for [no_stop, full_stop]
     seg:
-      weight: [0.5, 2.0]
+      weight: [ 0.5, 2.0 ]
   # Target padding value. No need to change.
   pad_value: -100
 
@@ -115,7 +114,7 @@ model:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
       min_lines_per_eg: 1
-      max_lines_per_eg: 5
+      max_lines_per_eg: 20
       max_length: ${model.max_length}
       truncate_max_tokens: 0
       max_input_lines: null
@@ -152,7 +151,7 @@ model:
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/et.train.txt"
         language: "et"
-          #  "fa", "fi", "fr", "gu", "hi", "hr", "hu", "id", "is", "it",
+        #  "fa", "fi", "fr", "gu", "hi", "hr", "hu", "id", "is", "it",
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/fa.train.txt"
         language: "fa"
@@ -183,7 +182,7 @@ model:
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/it.train.txt"
         language: "it"
-       #    "ja", "kk", "kn", "ko", "ky", "lt", "lv", "mk", "ml", "mr",
+      #    "ja", "kk", "kn", "ko", "ky", "lt", "lv", "mk", "ml", "mr",
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/ja.train.txt"
         language: "ja"
@@ -215,7 +214,7 @@ model:
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/mr.train.txt"
         language: "mr"
-         #   "nl", "or", "pa", "pl", "ps", "pt", "ro", "ru", "rw", "so",
+        #   "nl", "or", "pa", "pl", "ps", "pt", "ro", "ru", "rw", "so",
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/nl.train.txt"
         language: "nl"
@@ -246,7 +245,7 @@ model:
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/so.train.txt"
         language: "so"
-         #   "sr", "sw", "ta", "te", "tr", "uk", "zh"
+        #   "sr", "sw", "ta", "te", "tr", "uk", "zh"
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/sr.train.txt"
         language: "sr"
@@ -278,7 +277,7 @@ model:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
       min_lines_per_eg: 1
-      max_lines_per_eg: 5
+      max_lines_per_eg: 20
       max_length: ${model.max_length}
       truncate_max_tokens: 0
       rng_seed: 12345
@@ -378,7 +377,7 @@ model:
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/mr.dev.txt"
         language: "mr"
-         #   "nl", "or", "pa", "pl", "ps", "pt", "ro", "ru", "rw", "so",
+        #   "nl", "or", "pa", "pl", "ps", "pt", "ro", "ru", "rw", "so",
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/nl.dev.txt"
         language: "nl"
@@ -409,7 +408,7 @@ model:
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/so.dev.txt"
         language: "so"
-         #   "sr", "sw", "ta", "te", "tr", "uk", "zh"
+        #   "sr", "sw", "ta", "te", "tr", "uk", "zh"
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
         text_files: "/home/ubuntu/data/sr.dev.txt"
         language: "sr"
@@ -454,7 +453,7 @@ trainer:
   accelerator: auto
   strategy: dp
   num_sanity_val_steps: 1
-  log_every_n_steps:  300  # Interval of logging.
+  log_every_n_steps: 300  # Interval of logging.
   val_check_interval: 2000  # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
   resume_from_checkpoint: null
   logger: false
