@@ -1,12 +1,9 @@
-from collections import defaultdict
-from typing import DefaultDict, Dict, List, Optional, Tuple, Union
-
-import numpy as np
 import torch
 import torch.nn as nn
 from hydra.utils import instantiate
-from omegaconf import DictConfig, open_dict, OmegaConf
+from omegaconf import DictConfig, open_dict
 from pytorch_lightning import Trainer
+from typing import Dict, List, Optional, Tuple, Union
 
 from nemo.collections.common.data import ConcatMapDataset
 from nemo.collections.common.losses import AggregatorLoss, CrossEntropyLoss
@@ -16,12 +13,13 @@ from nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset import
     InferencePunctCapSegDataset,
     PunctCapSegDataset,
     NULL_PUNCT_TOKEN,
+    ACRONYM_TOKEN,
 )
 from nemo.collections.nlp.metrics.classification_report import ClassificationReport
 from nemo.collections.nlp.models.nlp_model import NLPModel
 from nemo.collections.nlp.modules.token_classification import PunctCapSegDecoder
 from nemo.core import PretrainedModelInfo, typecheck
-from nemo.core.neural_types import ChannelType, LengthsType, MaskType, NeuralType, LogitsType
+from nemo.core.neural_types import ChannelType, NeuralType, LogitsType
 from nemo.utils import logging
 
 
@@ -133,7 +131,7 @@ class PunctCapSegModel(NLPModel):
                 else:
                     raise TypeError("Invalid type: init_from_nemo_model is not a string or a dict!")
             # The rest of this function restores weights for certain layers that can change shape (embs, labels) or
-            # be shuffled (vocab)
+            # be shuffled (vocab). It's a little hacky and presumptive.
             with torch.inference_mode():
                 # If "post" punctuation differs, transfer as many weights as possible
                 if self._punct_post_labels != restored_model._punct_post_labels:
@@ -142,13 +140,15 @@ class PunctCapSegModel(NLPModel):
                     }
                     # This assumes some things about the decoder architecture
                     old_weight = restored_model._decoder._punct_head_post._linears[0].weight
-                    old_bias = restored_model._decoder._punct_head_post._linears[0].weight
-                    for i, label in self._punct_post_labels:
+                    old_bias = restored_model._decoder._punct_head_post._linears[0].bias
+                    old_emb = restored_model._decoder._punct_emb.weight
+                    for i, label in enumerate(self._punct_post_labels):
                         if label in old_label_to_idx:
                             old_idx = old_label_to_idx[label]
+                            logging.info(f"Map label {label} from index {old_idx} to index {i}")
                             self._decoder._punct_head_post._linears[0].weight[i] = old_weight[old_idx]
                             self._decoder._punct_head_post._linears[0].bias[i] = old_bias[old_idx]
-                    # old_weight = restored_model._decoder._punct_head_post._linears
+                            self._decoder._punct_emb.weight[i] = old_emb[old_idx]
                 # If "pre" punctuation differs, transfer as many weights as possible
                 if self._punct_pre_labels != restored_model._punct_pre_labels:
                     # Probably won't ever happen
@@ -164,7 +164,7 @@ class PunctCapSegModel(NLPModel):
                   (dropout): Dropout(p=0.1, inplace=False)
                 )
                 """
-                # Check if vocab differs. Transfer embeddings for as many tokens as possible
+                # Allow a modified vocab, while preserving embeddings for known tokens
                 if self.tokenizer.vocab != restored_model.tokenizer.vocab:
                     num_embeddings_restored = 0
                     old_token_to_idx: Dict[str, int] = {
@@ -190,7 +190,7 @@ class PunctCapSegModel(NLPModel):
                     vocab_size = len(self.tokenizer.vocab)
                     pct = num_embeddings_restored / vocab_size
                     logging.info(f"Restored {num_embeddings_restored} of {vocab_size} ({pct:0.2%}) of token embeddings")
-                # Check if positional embeddings dim differ. Should skip this is embeddings are not learned.
+                # Preserve positional embeddings when changing max length.
                 restored_max_len = restored_model.bert_model.embeddings.position_embeddings.weight.shape[0]
                 new_max_len = self.bert_model.embeddings.position_embeddings.weight.shape[0]
                 if new_max_len != restored_max_len:
@@ -609,7 +609,6 @@ class PunctCapSegModel(NLPModel):
             input_file=config.get("input_file"),
             input_texts=config.get("texts"),
             max_length=config.get("max_length", self._max_length),
-            fold_overlap=config.get("fold_overlap", 16),
         )
         dataloader = torch.utils.data.DataLoader(
             dataset=dataset,
@@ -620,58 +619,6 @@ class PunctCapSegModel(NLPModel):
             drop_last=config.get("drop_last", False),
         )
         return dataloader
-
-    def _unfold_tensors(
-        self,
-        folded_tensor: torch.Tensor,
-        lengths: torch.Tensor,
-        batch_ids: torch.Tensor,
-        overlap: int,
-        use_scale: Optional[bool] = None,
-        time_dim: int = 1,
-    ) -> List[torch.Tensor]:
-        # Move everything to CPU
-        folded_tensor = folded_tensor.cpu()
-        lengths = lengths.cpu()
-        batch_ids = batch_ids.cpu()
-        # Use a scale by default if the input is float (and presumably probabilities)
-        if use_scale is None:
-            use_scale = folded_tensor.is_floating_point()
-        scale: Optional[torch.Tensor] = None
-        if use_scale:
-            scale = torch.linspace(0, np.pi / 2, overlap).cos().unsqueeze(0)
-            if scale.dim() < folded_tensor.dim():
-                scale = scale.unsqueeze(-1)
-
-        unfolded_outputs: List = []
-        # For each unfolded batch index, find all subsegments
-        batch_id_to_indices: DefaultDict[int, List[int]] = defaultdict(list)
-        for position, batch_id in enumerate(batch_ids.tolist()):
-            batch_id_to_indices[batch_id].append(position)
-        # Recombine the segments of each batch element
-        for batch_index, indices in batch_id_to_indices.items():
-            unfolded_tensor: Optional[torch.Tensor] = None
-            for index in indices:
-                length = lengths[index]
-                # Strip BOS and EOS here. Reduce time dim by 1 because we extract batch element.
-                subsegment_tensor = folded_tensor[index].narrow(time_dim - 1, 1, length - 2)
-                if unfolded_tensor is None:
-                    unfolded_tensor = subsegment_tensor
-                else:
-                    if use_scale:
-                        # Scale final segment of existing tensor
-                        unfolded_tensor[-overlap:] = unfolded_tensor[-overlap:] * scale
-                        # Scale beginning segment of new tensor
-                        subsegment_tensor[:overlap] = subsegment_tensor[:overlap] * scale.flip(1)
-                    unfolded_tensor = torch.cat(
-                        (
-                            unfolded_tensor.narrow(time_dim - 1, 0, unfolded_tensor.shape[time_dim - 1] - overlap // 2),
-                            subsegment_tensor.narrow(time_dim - 1, overlap // 2, length - 2 - overlap // 2),
-                        )
-                    )
-            # Always return lists, because this function is used after running model
-            unfolded_outputs.append(unfolded_tensor)
-        return unfolded_outputs
 
     def _get_char_cap_preds(self, tokens: List[str], token_preds: List[List[int]]) -> List[int]:
         """Gathers character-level truecase predictions from subword predictions"""
@@ -728,30 +675,30 @@ class PunctCapSegModel(NLPModel):
                 label = self._punct_pre_labels[pred]
             if post:
                 current_char += token_len
-            if label != NULL_PUNCT_TOKEN:
+            if label == ACRONYM_TOKEN:
+                # All characters in this subtoken are punctuated with a period
+                for i in range(current_char - token_len, current_char):
+                    output_preds[i] = "."
+            elif label != NULL_PUNCT_TOKEN:
                 output_preds[current_char - (1 if post else 0)] = label
             if not post:
                 current_char += token_len
         return output_preds
 
     @torch.inference_mode()
-    def infer(
-        self, texts: List[str], fold_overlap: int = 20, batch_size: int = 32, max_length: Optional[int] = None,
-    ) -> List[List[str]]:
+    def infer(self, texts: List[str], batch_size: int = 32, max_length: Optional[int] = None,) -> List[List[str]]:
         in_mode = self.training
         self.eval()
         # Default to this model's values
         if max_length is None:
             max_length = self._max_length
-        dataloader = self.predict_dataloader(
-            {"texts": texts, "max_length": max_length, "fold_overlap": fold_overlap, "batch_size": batch_size,}
-        )
+        dataloader = self.predict_dataloader({"texts": texts, "max_length": max_length, "batch_size": batch_size,})
         out_texts: List[List[str]] = []
         for batch in dataloader:
-            folded_input_ids, folded_batch_indices, lengths = batch
-            mask = folded_input_ids.ne(self.tokenizer.pad_id)
+            input_ids, lengths = batch
+            mask = input_ids.ne(self.tokenizer.pad_id)
             # [B, T, D]
-            encoded = self.bert_model(input_ids=folded_input_ids, attention_mask=mask, token_type_ids=None,)
+            encoded = self.bert_model(input_ids=input_ids, attention_mask=mask, token_type_ids=None,)
             # Some LMs will return a tuple
             if isinstance(encoded, tuple):
                 encoded = encoded[0]
@@ -759,38 +706,20 @@ class PunctCapSegModel(NLPModel):
             pre_logits, post_logits, cap_logits, seg_logits = self._decoder(encoded=encoded, mask=mask)
             # [B, T, max_token_len]
             cap_probs = cap_logits.sigmoid()
-            cap_probs_list: List[torch.Tensor] = self._unfold_tensors(
-                folded_tensor=cap_probs, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
-            )
-
             # [B, T, 2]
             seg_probs = seg_logits.softmax(dim=-1)[..., 1]
-            seg_probs_list: List[torch.Tensor] = self._unfold_tensors(
-                folded_tensor=seg_probs, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
-            )
-
             # Select the highest-scoring value. Set null index to very small value (in case it was 1.0)
             pre_probs = pre_logits.softmax(dim=-1)
-            # print(pre_probs[..., 1])
-            pre_probs_list: List[torch.Tensor] = self._unfold_tensors(
-                folded_tensor=pre_probs, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
-            )
-
             post_probs = post_logits.softmax(dim=-1)
-            post_probs_list: List[torch.Tensor] = self._unfold_tensors(
-                folded_tensor=post_probs, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices,
-            )
-
-            input_ids_list: List[torch.Tensor] = self._unfold_tensors(
-                folded_tensor=folded_input_ids, lengths=lengths, overlap=fold_overlap, batch_ids=folded_batch_indices
-            )
-            for batch_idx, ids in enumerate(input_ids_list):
-                ids = ids.tolist()
+            for batch_idx, ids in enumerate(input_ids):
+                # note we strip BOS/EOS in all indexing
+                ids = ids.tolist()[1:-1]
                 tokens = self.tokenizer.ids_to_tokens(ids)
-                cap_preds: List[List[int]] = cap_probs_list[batch_idx].gt(0.5).tolist()
-                seg_preds: List[int] = seg_probs_list[batch_idx].gt(0.5).tolist()
-                pre_preds: List[int] = pre_probs_list[batch_idx].argmax(dim=-1).tolist()
-                post_preds: List[int] = post_probs_list[batch_idx].argmax(dim=-1).tolist()
+                length = lengths[batch_idx]
+                cap_preds: List[List[int]] = cap_probs[batch_idx, 1 : length - 1].gt(0.5).tolist()
+                seg_preds: List[int] = seg_probs[batch_idx, 1 : length - 1].gt(0.5).tolist()
+                pre_preds: List[int] = pre_probs[batch_idx, 1 : length - 1].argmax(dim=-1).tolist()
+                post_preds: List[int] = post_probs[batch_idx, 1 : length - 1].argmax(dim=-1).tolist()
 
                 input_text = self.tokenizer.ids_to_text(ids)
                 cap_char_preds = self._get_char_cap_preds(tokens=tokens, token_preds=cap_preds)

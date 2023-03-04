@@ -1,17 +1,17 @@
 import abc
-import re
-from typing import Dict, List, Optional, Tuple, Union
-
 import numpy as np
+import re
 import torch
+from typing import Dict, List, Optional, Tuple, Union
 
 from nemo.collections.common.tokenizers import TokenizerSpec, SentencePieceTokenizer
 from nemo.core import Dataset, typecheck
-from nemo.core.neural_types import ChannelType, IntType, LengthsType, NeuralType, LabelsType, MaskType
+from nemo.core.neural_types import ChannelType, LengthsType, NeuralType, LabelsType
 from nemo.utils import logging
 
-# Use this everywhere, to make it easy.
+# Define special tokens here, for convenience and consistency
 NULL_PUNCT_TOKEN = "<NULL>"
+ACRONYM_TOKEN = "<ACRONYM>"
 
 
 class InferencePunctCapSegDataset(Dataset):
@@ -32,7 +32,6 @@ class InferencePunctCapSegDataset(Dataset):
         input_texts: Optional[List[str]] = None,
         input_file: Optional[str] = None,
         max_length: int = 512,
-        fold_overlap: int = 16,
         ignore_idx: int = -100,
         max_subword_length: int = 16,
     ):
@@ -41,7 +40,6 @@ class InferencePunctCapSegDataset(Dataset):
             raise ValueError(f"Need exactly one of `input_texts` or `input_file`")
         self._tokenizer = tokenizer
         self._max_length = max_length
-        self._fold_overlap = fold_overlap
         self._ignore_idx = ignore_idx
         self._max_subword_length = max_subword_length
         self._using_sp = isinstance(self._tokenizer, SentencePieceTokenizer)
@@ -59,8 +57,7 @@ class InferencePunctCapSegDataset(Dataset):
     @property
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
         return {
-            "folded_input_ids": NeuralType(("B", "T"), ChannelType()),
-            "folded_batch_ids": NeuralType(("B",), IntType()),
+            "input_ids": NeuralType(("B", "T"), ChannelType()),
             "lengths": NeuralType(("B",), LengthsType()),
         }
 
@@ -73,35 +70,6 @@ class InferencePunctCapSegDataset(Dataset):
         input_ids = self._tokenizer.text_to_ids(input_text)
         return input_ids, input_text
 
-    def _fold_batch(self, input_ids: List[List[int]]) -> Tuple[torch.Tensor, ...]:
-        """Folds inputs to adhere to max length"""
-        out_batch_ids: List[int] = []
-        out_input_ids: List[List[int]] = []
-        out_lengths: List[int] = []
-        bos = self._tokenizer.bos_id  # noqa
-        eos = self._tokenizer.eos_id  # noqa
-        for batch_idx, next_input_ids in enumerate(input_ids):
-            start = 0
-            while True:
-                stop = min(start + self._max_length - 2, len(next_input_ids))
-                subsegment_ids = [bos] + next_input_ids[start:stop] + [eos]
-                out_input_ids.append(subsegment_ids)
-                out_lengths.append(len(subsegment_ids))
-                out_batch_ids.append(batch_idx)
-                if stop >= len(next_input_ids):
-                    break
-                start = stop - self._fold_overlap
-
-        batch_ids = torch.tensor(out_batch_ids)
-        lengths = torch.tensor(out_lengths)
-        ids_tensor = torch.full(
-            size=[lengths.shape[0], lengths.max()], dtype=torch.long, fill_value=self._tokenizer.pad_id  # noqa
-        )
-        for batch_idx, ids in enumerate(out_input_ids):
-            ids_tensor[batch_idx, : len(ids)] = torch.tensor(ids)
-
-        return ids_tensor, lengths, batch_ids
-
     @typecheck()
     def collate_fn(self, batch):
         """
@@ -113,9 +81,20 @@ class InferencePunctCapSegDataset(Dataset):
                 generated. `input_strings` is returns because some tokenizers are non-invertible, so this will preserve
                 the original input texts.
         """
-        all_ids: List[List[int]] = [x[0] for x in batch]
-        input_ids, lengths, batch_ids = self._fold_batch(all_ids)
-        return input_ids, batch_ids, lengths
+        input_ids_list: List[List[int]] = [x[0] for x in batch]
+        lengths = torch.tensor([len(x) for x in input_ids_list])
+        # Add 2 for BOS and EOS, clamp at max length
+        lengths = lengths.add(2).clamp(self._max_length)
+        bos = self._tokenizer.bos_id  # noqa
+        eos = self._tokenizer.eos_id  # noqa
+        input_ids = torch.full(
+            size=[lengths.shape[0], lengths.max()], dtype=torch.long, fill_value=self._tokenizer.pad_id  # noqa
+        )
+        for batch_idx, ids in enumerate(input_ids_list):
+            ids = ids[: self._max_length - 2]
+            ids = [bos] + ids + [eos]
+            input_ids[batch_idx, : len(ids)] = torch.tensor(ids)
+        return input_ids, lengths
 
 
 class PunctCapSegDataset(Dataset):
@@ -233,7 +212,8 @@ class PunctCapSegDataset(Dataset):
             char_index += num_chars_in_token
             if apply_post:
                 # Keep only the target for the last character of this subword
-                all_targets.append(char_targets[char_index - 1])
+                this_target = char_targets[char_index - 1]
+                all_targets.append(this_target)
         return all_targets
 
     @typecheck()
@@ -289,6 +269,7 @@ class PuncTargetsGenerator(abc.ABC):
         self._pre_labels = set(pre_labels)
         self._post_labels = set(post_labels)
         self._max_token_len = None
+        self._using_acronyms = ACRONYM_TOKEN in post_labels
 
     @abc.abstractmethod
     def generate_targets(self, input_text: str) -> Tuple[str, List[int], List[int]]:
@@ -346,6 +327,8 @@ class BasicPuncTargetsGenerator(PuncTargetsGenerator):
         # Empty outputs
         out_chars: List[str] = []
         post_targets: List[int] = []
+        if self._using_acronyms:
+            period_or_acronym_index = [self._post_label_to_index["."], self._post_label_to_index[ACRONYM_TOKEN]]
         for input_char in input_text:
             # No targets for spaces because they are ignored when generating subtokens
             if input_char == " ":
@@ -353,7 +336,19 @@ class BasicPuncTargetsGenerator(PuncTargetsGenerator):
                 continue
             # Either create a target, or append to the input
             if post_targets and input_char in self._post_labels:
-                post_targets[-1] = self._post_label_to_index[input_char]
+                # If two consecutive non-space chars end with '.', both are acronyms
+                # There's probably a more graceful way to implement this check.
+                if (
+                    self._using_acronyms
+                    and input_char == "."
+                    and len(post_targets) > 1
+                    and out_chars[-2] != " "
+                    and post_targets[-2] in period_or_acronym_index  # noqa
+                ):
+                    post_targets[-2] = self._post_label_to_index[ACRONYM_TOKEN]
+                    post_targets[-1] = self._post_label_to_index[ACRONYM_TOKEN]
+                else:
+                    post_targets[-1] = self._post_label_to_index[input_char]
             else:
                 out_chars.append(input_char)
                 post_targets.append(self._post_null_index)
@@ -375,6 +370,8 @@ class SpanishPuncTargetsGenerator(PuncTargetsGenerator):
         post_targets: List[int] = []
         pre_targets: List[int] = []
         non_whitespace_idx = 0
+        if self._using_acronyms:
+            period_or_acronym_index = [self._post_label_to_index["."], self._post_label_to_index[ACRONYM_TOKEN]]
         for input_char in input_text:
             # Ignore spaces because they are ignored when generating subtokens
             if input_char == " ":
@@ -382,7 +379,19 @@ class SpanishPuncTargetsGenerator(PuncTargetsGenerator):
                 continue
             # Either create a target, or append to the input
             if input_char in self._post_labels:
-                post_targets[-1] = self._post_label_to_index[input_char]
+                # If two consecutive non-space chars end with '.', both are acronyms
+                # There's probably a more graceful way to implement this check.
+                if (
+                    self._using_acronyms
+                    and input_char == "."
+                    and len(post_targets) > 1
+                    and out_chars[-2] != " "
+                    and post_targets[-2] in period_or_acronym_index  # noqa
+                ):
+                    post_targets[-2] = self._post_label_to_index[ACRONYM_TOKEN]
+                    post_targets[-1] = self._post_label_to_index[ACRONYM_TOKEN]
+                else:
+                    post_targets[-1] = self._post_label_to_index[input_char]
             elif input_char in self._pre_labels:
                 pre_targets.append(self._pre_label_to_index[input_char])
             else:
