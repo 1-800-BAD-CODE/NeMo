@@ -1,0 +1,55 @@
+
+model: "/Users/shane/repos/nemo/examples/nlp/token_classification/nemo_experiments/test_sbd/2022-12-26_17-10-38/checkpoints/test_sbd.nemo"
+threshold: 0.5
+input_data:
+  # ar
+  - "إنه يبدو غالياً قليلاً بالنسبة لمبنى يحتاج إلى بعض الإصلاحات، هذا كل ما فى الأمر. هذا جيد. ماما وادك بالمنزل."
+  # bn
+  - "তবে ট্রেলারে তার দেখা মিলল না। পরে ব্যাগটি তল্লাশি করে ইয়াবা, চারটি স্বর্ণের বার ও নগদ সাড়ে চার লাখ টাকা পাওয়া যায়। এতে মাছটির দাম বেড়ে গেছে।"
+  # de
+  - "Auf alle Fälle sind 90 Minuten voller Einsatz und Konzentration gefordert. Amos Vogel legte seinen Fokus auf die Kontextualisierung der einzelnen Filme durch gezielte Programmarbeit. Georgi verspricht Es wird Feierlichkeiten geben."
+  # en
+  - "Irwin wrote on Instagram. However, money does talk and the Roosters reported $130000 offer might not be up to scratch. There are doctors, but since they joined the civil disobedience protest movement, they can't come to the hospital."
+  - "Mr. Brown and Dr. Smith went to the park. They played baseball until 8 p.m. Then they went home."
+  # es
+  - "Y sí, efectivamente, nos estamos refiriendo a la NASA, la ESA, etc. También tenía un servicio de bar y venta de refrescos y bebidas alcohólicas, así como otros productos. En cuanto a la Libre Determinación, su importe se distribuirá de forma anual."
+  # et
+  - "Hiljuti suure tagasituleku teinud Mike Tyson naaseb taas poksiringi. Riigikogu liikme Kert Kingo hinnangul on valitsus riigikokku toonud seaduseelnõu, millega tahetakse riigis kehtestada totalitaarset kontrolli. Kehakaalu tõusu tingib liigne energia tarbimine, mida organism ei jõua päeva jooksul ära kulutada."
+  # fi
+  - "Yksi ongelma ratkaistu. Kuinka kauan olette olleet Meksikossa? Kävin jokin aika sitten tapaamassa komisario Fournieria tärkeässä asiassa."
+  # fr
+  - "Avec cette série, on sent quelque chose. En rafale, il pourra dépasser les 65 kmh. Le mercure restera homogène à 16 °C. Désormais à 10 contre 10 avec un but de retard, Arsenal est complètement relancé dans cette demi finale aller."
+  # hi
+  - "प्रभु चरणणों में यही विनती है कि हमारे विचाररों को सदैव पवित्र बनाए रखने की कृपा बनी रहे। भारत में यह सेरेमनी डिज्नी स्टार के चैनललों पर देखी जा सकती है। इस कार्रवाई से होटललों और ललांज में अफरा तफरी मच गई है।"
+  # id
+  - "Masyarakat juga harus menjalankan protokol kesehatan dengan disiplin dan juga segera divaksinasi bagi yang belum. Pelaku ingin nikah, tetapi tidak direstui bapaknya. Untuk selanjutnya, setiap produksi Seven Bucks, baik TV, film atau apa pun, kami tidak akan lagi menggunakan senjata sungguhan."
+  # is
+  - "Síðustu vikurnar voru móður okkar hreint kvalræði. Helena Ólafsdóttir og Guðlaug Jónsdóttir knattspyrnukempur gengu í heilagt hjónaband um helgina. Þess vegna er alltaf verið að tala um að vera ekki við hraunjaðarinn."
+  # it
+  - "Credevo di potermi fidare di lei. Andare con loro, portarli fuori dal porto? I romani, prima di andarsene, sommersero la città. I tuoi antenati custodirono il segreto."
+  # ja
+  - "毛先をそろえる程度で？持たないよ。レベッカ上品な物言いで頼む。またイェーガーに乗ったらあなたは死にます。"
+  # lt
+  - "Mokytojau, nusiimk skrybėlę. Kur aš tokia eisiu? Mes galime važiuoti kitą vakarą. Tik arbatos, ačiū."
+  # lv
+  - "Viņa ir gatava izveidot uzbrucēja fotorobotu. Jā. Dažas no labākajām snaudām mūžā esmu izbaudījis Karaliskajā Šekspīra teātrī. Kas viņu iedrošinās vēl vairāk."
+  # ko
+  - "하지만 원전 추진에 관한 내부 문건이 분명히 더 있을 겁니다. 한국은 어떤가. 반면 글로벌 제약사들은 이미 콜드체인에 관해 큰 관심을 갖고 있었다."
+  # no
+  - "Ash Ketchum drømmer om eventyr. Ingen i Starfleet kunne gjøre dette. Vil du bli påkjørt? Det går så bra her."
+  # nl
+  - "Ik heb een paar dagen nodig om de mannen weer te verzamelen. Heeft ze een interessant accent? We moeten deze kant op. Ik kon er niks aan doen."
+  # pl
+  - "Potraktowaliśmy ją bardzo poważnie. Prace Larsa Vilksa są obecnie wystawiane na wystawie Sztuka polityczna w Centrum Sztuki Współczesnej Zamek Ujazdowski w Warszawie. Czy do uznania choroby zawodowej trzeba wykazać, że nigdzie poza pracą nie było się narażonym na szkodliwe czynniki?"
+  # pt
+  - "John Kennedy, titular em sua ausência, está suspenso com três cartões amarelos. Esses três pilares para a imigração, citados pela pesquisa do ESCOE, começaram a cambalear com a pandemia. As poucas oportunidades que teve no profissional do Defensor o fizeram reavaliar o futuro."
+  # ru
+  - "Они не знали, что я просто угараю, следует из композиции Элджея. Нас слишком мало, чтобы потерять сотни жизней из за злоупотребления алкоголем, когда мы выйдем из пандемии коронавируса. Катар начал предлагать туры для болельщиков на ЧМ 2022."
+  # sv
+  - "Öppna dina fläskiga, sympatiska armar? Vi spelar. 50 dollar per poäng. Jag menari gär, förraveckan."
+  # tr
+  - "Yani konjonktürel şartlarla pozisyon alan NATO üyeleri kurumsal işbirliğine zarar veren bir dönemi geçirdi NATO. Daha sonra insanları sosyal medyadan bilgilendirdik. Devam eden şampiyonada ülkemizi temsil eden diğer sporculara başarılar diliyorum dedi."
+  # uk
+  - "Треба бути тепер готовими до наступного. Багато дітей опинилися ізольованими вдома, а час, який вони проводять у мережі, збільшився у рази. Це мала б супроводжувати дискусія у ЗМІ та суспільстві, аби було зрозуміло, чому саме це пропаганда, були наведені докази."
+  # zh
+  - "不断刷新的数字背后是满满民生情。但另两名非盟官员说，莫德纳要到明年才能交付疫苗，导致谈判破裂。温室气体等大气本底观测是一项专业性很强的工作，容不得一点马虎。"

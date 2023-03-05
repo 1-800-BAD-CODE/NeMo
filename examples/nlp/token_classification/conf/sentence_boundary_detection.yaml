@@ -1,0 +1,301 @@
+
+name: sbd_small_49lang_opensub
+
+model:
+  ignore_idx: -100
+  loss_weights: [0.5, 3.0]
+
+  language_model:
+    pretrained_model_name: null
+    nemo_file: null
+    config_file: null
+    config:
+      model_type: BertModel  # added
+      vocab_size: 64000
+      hidden_size: 128
+      num_hidden_layers: 4
+      num_attention_heads: 8
+      intermediate_size: 512
+      hidden_act: gelu
+      hidden_dropout_prob: 0.1
+      attention_probs_dropout_prob: 0.1
+      max_position_embeddings: 128
+      type_vocab_size: 1
+
+  tokenizer:
+    tokenizer_name: sentencepiece
+    tokenizer_model: /home/ubuntu/processed/spe_mixed_case_64k_49lang.model
+    vocab_file: null
+    special_tokens:
+      bos_token: "<s>"
+      eos_token: "</s>"
+      pad_token: "<pad>"
+
+  decoder:
+    use_transformer_init: true
+    num_layers: 1
+    dropout: 0.1
+
+  train_ds:
+    num_workers: 0
+    batch_size: 256
+    common:
+      min_concat: 0
+      max_concat: 8
+      max_length: 256
+      target_pad_id: -100
+      seed: null
+      p_lowercase: 0.5
+      max_input_lines: 1000000
+    data:
+      af:
+        text_files: "/home/ubuntu/processed/af.train.txt"
+      ar:
+        text_files: "/home/ubuntu/processed/ar.train.txt"
+      bg:
+        text_files: "/home/ubuntu/processed/bg.train.txt"
+      bn:
+        text_files: "/home/ubuntu/processed/bn.train.txt"
+      bs:
+        text_files: "/home/ubuntu/processed/bs.train.txt"
+      ca:
+        text_files: "/home/ubuntu/processed/ca.train.txt"
+      cs:
+        text_files: "/home/ubuntu/processed/cs.train.txt"
+      da:
+        text_files: "/home/ubuntu/processed/da.train.txt"
+      de:
+        text_files: "/home/ubuntu/processed/de.train.txt"
+      el:
+        text_files: "/home/ubuntu/processed/el.train.txt"
+      en:
+        text_files: "/home/ubuntu/processed/en.train.txt"
+      eo:
+        text_files: "/home/ubuntu/processed/eo.train.txt"
+      es:
+        text_files: "/home/ubuntu/processed/es.train.txt"
+      et:
+        text_files: "/home/ubuntu/processed/et.train.txt"
+      eu:
+        text_files: "/home/ubuntu/processed/eu.train.txt"
+      fi:
+        text_files: "/home/ubuntu/processed/fi.train.txt"
+      fr:
+        text_files: "/home/ubuntu/processed/fr.train.txt"
+      gl:
+        text_files: "/home/ubuntu/processed/gl.train.txt"
+      he:
+        text_files: "/home/ubuntu/processed/he.train.txt"
+      hi:
+        text_files: "/home/ubuntu/processed/hi.train.txt"
+      hr:
+        text_files: "/home/ubuntu/processed/hr.train.txt"
+      hu:
+        text_files: "/home/ubuntu/processed/hu.train.txt"
+      id:
+        text_files: "/home/ubuntu/processed/id.train.txt"
+      is:
+        text_files: "/home/ubuntu/processed/is.train.txt"
+      it:
+        text_files: "/home/ubuntu/processed/it.train.txt"
+      ja:
+        text_files: "/home/ubuntu/processed/ja.train.txt"
+        continuous_script: true
+      ka:
+        text_files: "/home/ubuntu/processed/ka.train.txt"
+      ko:
+        text_files: "/home/ubuntu/processed/ko.train.txt"
+      lt:
+        text_files: "/home/ubuntu/processed/lt.train.txt"
+      lv:
+        text_files: "/home/ubuntu/processed/lv.train.txt"
+      mk:
+        text_files: "/home/ubuntu/processed/mk.train.txt"
+      ml:
+        text_files: "/home/ubuntu/processed/ml.train.txt"
+      ms:
+        text_files: "/home/ubuntu/processed/ms.train.txt"
+      nl:
+        text_files: "/home/ubuntu/processed/nl.train.txt"
+      'no':
+        text_files: "/home/ubuntu/processed/no.train.txt"
+      pl:
+        text_files: "/home/ubuntu/processed/pl.train.txt"
+      pt:
+        text_files: "/home/ubuntu/processed/pt.train.txt"
+      ro:
+        text_files: "/home/ubuntu/processed/ro.train.txt"
+      ru:
+        text_files: "/home/ubuntu/processed/ru.train.txt"
+      si:
+        text_files: "/home/ubuntu/processed/si.train.txt"
+      sk:
+        text_files: "/home/ubuntu/processed/sk.train.txt"
+      sl:
+        text_files: "/home/ubuntu/processed/sl.train.txt"
+      sq:
+        text_files: "/home/ubuntu/processed/sq.train.txt"
+      sv:
+        text_files: "/home/ubuntu/processed/sv.train.txt"
+      th:
+        text_files: "/home/ubuntu/processed/th.train.txt"
+      tr:
+        text_files: "/home/ubuntu/processed/tr.train.txt"
+      uk:
+        text_files: "/home/ubuntu/processed/uk.train.txt"
+      vi:
+        text_files: "/home/ubuntu/processed/vi.train.txt"
+      zh:
+        text_files: "/home/ubuntu/processed/zh.train.txt"
+        continuous_script: true
+
+  validation_ds:
+    num_workers: 0
+    batch_size: 128
+    common:
+      min_concat: 0
+      max_concat: 8
+      max_length: 256
+      target_pad_id: -100
+      seed: 12345
+      p_lowercase: 0.5
+    data:
+      af:
+        text_files: "/home/ubuntu/processed/af.dev.txt"
+      ar:
+        text_files: "/home/ubuntu/processed/ar.dev.txt"
+      bg:
+        text_files: "/home/ubuntu/processed/bg.dev.txt"
+      bn:
+        text_files: "/home/ubuntu/processed/bn.dev.txt"
+      bs:
+        text_files: "/home/ubuntu/processed/bs.dev.txt"
+      ca:
+        text_files: "/home/ubuntu/processed/ca.dev.txt"
+      cs:
+        text_files: "/home/ubuntu/processed/cs.dev.txt"
+      da:
+        text_files: "/home/ubuntu/processed/da.dev.txt"
+      de:
+        text_files: "/home/ubuntu/processed/de.dev.txt"
+      el:
+        text_files: "/home/ubuntu/processed/el.dev.txt"
+      en:
+        text_files: "/home/ubuntu/processed/en.dev.txt"
+      eo:
+        text_files: "/home/ubuntu/processed/eo.dev.txt"
+      es:
+        text_files: "/home/ubuntu/processed/es.dev.txt"
+      et:
+        text_files: "/home/ubuntu/processed/et.dev.txt"
+      eu:
+        text_files: "/home/ubuntu/processed/eu.dev.txt"
+      fi:
+        text_files: "/home/ubuntu/processed/fi.dev.txt"
+      fr:
+        text_files: "/home/ubuntu/processed/fr.dev.txt"
+      gl:
+        text_files: "/home/ubuntu/processed/gl.dev.txt"
+      he:
+        text_files: "/home/ubuntu/processed/he.dev.txt"
+      hi:
+        text_files: "/home/ubuntu/processed/hi.dev.txt"
+      hr:
+        text_files: "/home/ubuntu/processed/hr.dev.txt"
+      hu:
+        text_files: "/home/ubuntu/processed/hu.dev.txt"
+      id:
+        text_files: "/home/ubuntu/processed/id.dev.txt"
+      is:
+        text_files: "/home/ubuntu/processed/is.dev.txt"
+      it:
+        text_files: "/home/ubuntu/processed/it.dev.txt"
+      ja:
+        text_files: "/home/ubuntu/processed/ja.dev.txt"
+        continuous_script: true
+      ka:
+        text_files: "/home/ubuntu/processed/ka.dev.txt"
+      ko:
+        text_files: "/home/ubuntu/processed/ko.dev.txt"
+      lt:
+        text_files: "/home/ubuntu/processed/lt.dev.txt"
+      lv:
+        text_files: "/home/ubuntu/processed/lv.dev.txt"
+      mk:
+        text_files: "/home/ubuntu/processed/mk.dev.txt"
+      ml:
+        text_files: "/home/ubuntu/processed/ml.dev.txt"
+      ms:
+        text_files: "/home/ubuntu/processed/ms.dev.txt"
+      nl:
+        text_files: "/home/ubuntu/processed/nl.dev.txt"
+      'no':
+        text_files: "/home/ubuntu/processed/no.dev.txt"
+      pl:
+        text_files: "/home/ubuntu/processed/pl.dev.txt"
+      pt:
+        text_files: "/home/ubuntu/processed/pt.dev.txt"
+      ro:
+        text_files: "/home/ubuntu/processed/ro.dev.txt"
+      ru:
+        text_files: "/home/ubuntu/processed/ru.dev.txt"
+      si:
+        text_files: "/home/ubuntu/processed/si.dev.txt"
+      sk:
+        text_files: "/home/ubuntu/processed/sk.dev.txt"
+      sl:
+        text_files: "/home/ubuntu/processed/sl.dev.txt"
+      sq:
+        text_files: "/home/ubuntu/processed/sq.dev.txt"
+      sv:
+        text_files: "/home/ubuntu/processed/sv.dev.txt"
+      th:
+        text_files: "/home/ubuntu/processed/th.dev.txt"
+      tr:
+        text_files: "/home/ubuntu/processed/tr.dev.txt"
+      uk:
+        text_files: "/home/ubuntu/processed/uk.dev.txt"
+      vi:
+        text_files: "/home/ubuntu/processed/vi.dev.txt"
+      zh:
+        text_files: "/home/ubuntu/processed/zh.dev.txt"
+        continuous_script: true
+
+  optim:
+    name: adam
+    lr: 5e-4
+
+    sched:
+      name: CosineAnnealing
+      warmup_steps: 16000
+      warmup_ratio: null
+      last_epoch: -1
+      min_lr: 1e-6
+
+trainer:
+  devices: -1 # the number of gpus, 0 for CPU
+  num_nodes: 1
+  max_steps: 300000 # precedence over max_epochs
+  accumulate_grad_batches: 1 # accumulates grads every k batches
+  gradient_clip_val: 0.0
+  precision: 16 # Should be set to 16 for O1 and O2, default is 16 as PT ignores it when am_level is O0
+  accelerator: gpu
+  enable_checkpointing: False  # Provided by exp_manager
+  logger: False  # Provided by exp_manager
+  log_every_n_steps: 400  # Interval of logging.
+  val_check_interval: 10000  # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
+  num_sanity_val_steps: 2
+  strategy: dp
+  resume_from_checkpoint: null # The path to a checkpoint file to continue the training, restores the whole state including the epoch, step, LR schedulers, apex, etc.
+
+exp_manager:
+  name: ${name}
+  exp_dir: null  # exp_dir for your experiment, if None, defaults to "./nemo_experiments"
+  create_tensorboard_logger: true  # Whether you want exp_manager to create a tb logger
+  create_checkpoint_callback: true  # Whether you want exp_manager to create a model checkpoint callback
+  checkpoint_callback_params:
+    save_top_k: 1
+    monitor: "val_en_f1"
+    mode: "max"
+    always_save_nemo: true
+#  version:
