@@ -1,0 +1,186 @@
+name: "punct_cap_seg_en"
+init_from_nemo_model:
+  model0:
+    path: /home/ubuntu/tmp.nemo
+    exclude: [
+      "_decoder._punct_head_pre",
+      "_decoder._punct_head_post",
+      "_punct_pre_loss",
+      "_punct_post_loss",
+      "_decoder._punct_emb",
+    ]
+
+model:
+  # For reference only
+  supported_languages: [
+    "en"
+  ]
+  # Print dev metrics to stdout during training for these languages
+  log_val_metrics_for:
+    - en
+  # Whether to print the training metrics to stdout every `trainer.log_every_n_steps`
+  log_train_metrics: true
+  # Accumulate batch metrics every this many steps. Useful for getting more data points into logging.
+  batch_metrics_every_n_steps: 15
+
+  max_length: 512
+
+  tokenizer:
+    tokenizer_name: sentencepiece
+    tokenizer_model: /home/ubuntu/spe_32k_lc_en.model
+    vocab_file: null
+    special_tokens:
+      bos_token: "<s>"
+      eos_token: "</s>"
+      pad_token: "<pad>"
+      unk_token: "<unk>"
+
+  language_model:
+    config_file: null
+    pretrained_model_name: null
+    nemo_file: null
+    lm_checkpoint: null
+    vocab_file: null
+    config:
+      model_type: BertModel  # added
+      vocab_size: 64000
+      hidden_size: 512
+      num_hidden_layers: 6
+      num_attention_heads: 8
+      intermediate_size: 2048
+      hidden_act: gelu
+      hidden_dropout_prob: 0.1
+      attention_probs_dropout_prob: 0.1
+      max_position_embeddings: 512
+      type_vocab_size: 1
+
+  decoder:
+    _target_: nemo.collections.nlp.modules.token_classification.MHAPunctCapSegDecoder
+    punct_num_classes_post: null  # will get set by model
+    punct_num_classes_pre: null  # will get set by model
+    max_subword_length: null  # will get set by model
+    encoder_dim: ${model.language_model.config.hidden_size}
+    cap_head_dropout: 0.1
+    punct_head_dropout: 0.1
+    seg_head_dropout: 0.1
+    cap_head_n_layers: 2
+    cap_head_intermediate_dim: 128
+    punct_head_n_layers: 1
+    seg_head_n_layers: 1
+    emb_dim: 4
+    transformer_num_layers: 2
+    transformer_inner_size: 2048
+    transformer_num_heads: 4
+    transformer_ffn_dropout: 0.1
+    post_punct_null_idx: 0  # TODO should be set by model
+
+  null_punct_token: "<NULL>"
+  # Punctuation tokens that are predicted before each subword. Add "¡" here if using it.
+  punct_pre_labels: [ "<NULL>", "¿", ]
+  # Punctuation tokens that are predicted after each subword. Note the datasets below are configured to map the Chinese
+  # enumeration comma to a regular Chinese comma, due to inconsistencies in the raw data, so it is not learned.
+  punct_post_labels: [
+    "<NULL>", "<ACRONYM>",
+    ".", ",", "?",
+  ]
+  loss:
+    # Loss weights for [pre_punct, post_punct, cap, seg]
+    agg_loss_weights: [ 1, 1, 1, 1 ]
+    # Loss weights for punct_post_labels
+    punct_post:
+      # Weight for each positive example. Computed via `counts.pow(1/T).mean() / counts.pow(1/T)`. T is 5 here.
+      weight: [ 0.5, 2.0, 0.74, 0.8, 1.03 ]
+    # Loss weights for punct_pre_labels
+    punct_pre:
+      weight: [ 1, 1 ]
+    # Loss weights for [lower_case, upper_case]
+    cap:
+      weight: 1.0  # BCE - only positive class weight
+    # Loss weights for [no_stop, full_stop]
+    seg:
+      weight: [ 0.5, 1.5 ]
+  # Target padding value. No need to change.
+  pad_value: -100
+
+  train_ds:
+    batch_size: 128
+    num_workers: 12
+    # A list of datasets will be used to create a ConcatMapDataset.
+    sampling_technique: "temperature"
+    sampling_temperature: 5
+    # "common" key/value pairs will be added to every data set, unless that dataset already specifies the key.
+    common:
+      punct_pre_labels: ${model.punct_pre_labels}
+      punct_post_labels: ${model.punct_post_labels}
+      min_lines_per_eg: 1
+      max_lines_per_eg: 20
+      max_length: ${model.max_length}
+      truncate_max_tokens: 0
+      max_input_lines: null
+    # Typically, set up one data set per language.
+    datasets:
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data/en.train.txt"
+        language: "en"
+
+  validation_ds:
+    batch_size: 256
+    num_workers: 4
+    # "common" options are analogous to train_ds
+    common:
+      punct_pre_labels: ${model.punct_pre_labels}
+      punct_post_labels: ${model.punct_post_labels}
+      min_lines_per_eg: 1
+      max_lines_per_eg: 8
+      max_length: ${model.max_length}
+      truncate_max_tokens: 0
+      rng_seed: 12345
+      max_input_lines: null
+    datasets:
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data/en.dev.txt"
+        language: "en"
+
+  optim:
+    name: adam
+    lr: 2e-5
+    sched:
+      name: WarmupAnnealing
+      min_lr: 1e-6
+      last_epoch: -1
+      warmup_ratio: null
+      warmup_steps: 8000
+
+trainer:
+  devices: -1
+  num_nodes: 1
+  max_epochs: -1
+  max_steps: 30000
+  accumulate_grad_batches: 1
+  precision: bf16
+  accelerator: auto
+  strategy: ddp
+  num_sanity_val_steps: 1
+  log_every_n_steps: 300  # Interval of logging.
+  val_check_interval: 1000
+  resume_from_checkpoint: null
+  logger: false
+  enable_checkpointing: false
+  benchmark: false
+
+exp_manager:
+  exp_dir: /home/ubuntu/nemo_exp/
+  name: ${name}
+  create_tensorboard_logger: true
+  create_checkpoint_callback: true
+  # Available metrics are val_{language}/{loss,{punct_pre,punct_post,cap,seg}_{f1,precision,recall}
+  # losses are most stable; punctuation f1 is noisy due to many low-frequency classes
+  checkpoint_callback_params:
+    monitor: "val_en/loss"
+    mode: "min"
+    save_top_k: 2
+    always_save_nemo: true
+#  # for continuing from a '*-last.ckpt' in an experiment directory
+#  version: 2022-10-03_16-56-33
+#  resume_if_exists: true
+#  resume_ignore_no_checkpoint: false

@@ -96,6 +96,8 @@ class PunctCapSegModel(NLPModel):
         self._dev_metrics: nn.ModuleList = nn.ModuleList()
         if self._validation_dl is not None:
             self._dev_metrics = self._setup_metrics(len(self._validation_dl))
+            if len(self._validation_dl) == 1:
+                self._dev_metrics = nn.ModuleList([self._dev_metrics])
         self._train_metrics: nn.ModuleDict = self._setup_metrics()
         # module list of module dict
         self._test_metrics: nn.ModuleDict = self._setup_metrics()
@@ -165,12 +167,14 @@ class PunctCapSegModel(NLPModel):
                 )
                 """
                 # Allow a modified vocab, while preserving embeddings for known tokens
-                if self.tokenizer.vocab != restored_model.tokenizer.vocab:
+                if self.tokenizer.vocab != restored_model.tokenizer.vocab and self._cfg.get(
+                    "init_partial_vocab", False
+                ):
                     num_embeddings_restored = 0
                     old_token_to_idx: Dict[str, int] = {
                         token: idx for idx, token in enumerate(restored_model.tokenizer.vocab)
                     }
-                    for i, token in self.tokenizer.vocab:
+                    for i, token in enumerate(self.tokenizer.vocab):
                         # We'll try to find this token, or a similar token, in the old vocab
                         old_idx: Optional[int]
                         if token in old_token_to_idx:
@@ -455,7 +459,7 @@ class PunctCapSegModel(NLPModel):
         metrics["seg_report"](seg_preds[seg_mask], seg_targets[seg_mask])
 
     def _test_step(self, batch: Tuple, dataloader_idx: int = 0) -> None:
-        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch, testing=True)
+        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch, testing=False)
         _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
         # Prepare masks
         cap_mask = cap_targets.ne(self._ignore_idx)
@@ -513,10 +517,10 @@ class PunctCapSegModel(NLPModel):
     # TODO re-enable these, in the case of using only one language.
     #   When using multiple data loaders, uncommenting these will break eval.
     #   When using one data loader, commenting these will break eval.
-    # def validation_epoch_end(self, outputs) -> None:
-    #     # Always use multi implementation and just use index 0.
-    #     self.multi_validation_epoch_end(outputs=outputs, dataloader_idx=0)
-    #
+    def validation_epoch_end(self, outputs) -> None:
+        # Always use multi implementation and just use index 0.
+        self.multi_validation_epoch_end(outputs=outputs, dataloader_idx=0)
+
     def test_epoch_end(self, outputs) -> None:
         # Compute, reset, and log the precision/recall/f1 for punct/cap/seg for this threshold
         for analytic in ["punct_pre", "punct_post", "cap", "seg"]:
@@ -528,7 +532,7 @@ class PunctCapSegModel(NLPModel):
             logging.info(f"{analytic} test report: {report}")
 
     def multi_validation_epoch_end(self, outputs, dataloader_idx: int = 0) -> None:
-        self._multi_eval_epoch_end(dataloader_idx)
+        return self._multi_eval_epoch_end(dataloader_idx)
 
     def validation_step(self, batch: Tuple[torch.Tensor], batch_idx: int, dataloader_idx: int = 0) -> None:
         self._eval_step(batch=batch, dataloader_idx=dataloader_idx)
