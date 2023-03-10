@@ -1,14 +1,13 @@
 import abc
-from typing import Optional, Dict
-
 import torch
 import torch.nn as nn
+from typing import Optional, Dict
 
 from nemo.collections.nlp.modules.common.transformer import TransformerEncoder
 from nemo.core import typecheck
 from nemo.core.classes import NeuralModule
-from nemo.core.neural_types import NeuralType, ChannelType, LogitsType, MaskType, LabelsType
 from nemo.core.connectors.save_restore_connector import SaveRestoreConnector
+from nemo.core.neural_types import NeuralType, ChannelType, LogitsType, MaskType, LabelsType
 
 
 class ClassificationHead(NeuralModule):
@@ -295,7 +294,7 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         punc_targets: Optional[torch.Tensor] = None,
         seg_targets: Optional[torch.Tensor] = None,
     ):
-        # [B, T, C * max_token_len]
+        # [B, T, C]
         punct_logits_post = self._punct_head_post(encoded=encoded)
 
         # At training time, we get the reference punctuation targets to teacher-force the other heads.
@@ -304,6 +303,9 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
             # [B, T, C] -> [B, T]
             # Note - no need to detach because this should not happen in train mode.
             punc_targets = punct_logits_post.argmax(dim=-1)
+            # punc_targets.fill_(2)
+            # punc_targets[:, 0] = 0
+            # punc_targets[:, -1] = 0
         # [B, T, emb_dim]
         embs = self._punct_emb(punc_targets)
         # Concatenate the punctuation embeddings to the input and re-encode
@@ -330,6 +332,117 @@ class MHAPunctCapSegDecoder(PunctCapSegDecoder):
         seg_targets = seg_targets.unsqueeze(-1)
         # Concatenate the shifted sentence boundary predictions for the truecase head
         cap_head_input = torch.cat((re_encoded, seg_targets), dim=-1)
+        # [B, T, max_subword_len]
+        cap_logits = self._cap_head(encoded=cap_head_input)
+
+        return punct_logits_pre, punct_logits_post, cap_logits, seg_logits
+
+
+class ConditionedPCSDecoder(PunctCapSegDecoder):
+    """
+    """
+
+    def __init__(
+        self,
+        encoder_dim: int,
+        punct_num_classes_post: int,
+        punct_num_classes_pre: int,
+        max_subword_length: int,
+        emb_dim: int = 4,
+        punct_head_n_layers: int = 2,
+        cap_head_n_layers: int = 2,
+        seg_head_n_layers: int = 2,
+        punct_head_intermediate_dim: int = 128,
+        cap_head_intermediate_dim: int = 128,
+        seg_head_intermediate_dim: int = 128,
+        punct_head_dropout: float = 0.1,
+        cap_head_dropout: float = 0.1,
+        seg_head_dropout: float = 0.1,
+    ):
+        super().__init__()
+        self._max_subword_len = max_subword_length
+        self._num_post_punct_classes = punct_num_classes_post
+        self._punct_emb = nn.Embedding(num_embeddings=punct_num_classes_post, embedding_dim=emb_dim)
+        # Initialize the embeddings to the same scale as the attn module and heads
+        nn.init.normal_(self._punct_emb.weight, mean=0.0, std=0.02)
+
+        self._punct_head_post: ClassificationHead = ClassificationHead(
+            encoded_dim=encoder_dim,
+            num_layers=punct_head_n_layers,
+            dropout=punct_head_dropout,
+            activation="relu",
+            intermediate_dim=punct_head_intermediate_dim,
+            num_classes=punct_num_classes_post,
+        )
+        self._punct_head_pre: ClassificationHead = ClassificationHead(
+            encoded_dim=encoder_dim,
+            num_layers=punct_head_n_layers,
+            dropout=punct_head_dropout,
+            activation="relu",
+            intermediate_dim=punct_head_intermediate_dim,
+            num_classes=punct_num_classes_pre,
+        )
+        self._seg_head: ClassificationHead = ClassificationHead(
+            encoded_dim=encoder_dim + emb_dim,
+            num_layers=seg_head_n_layers,
+            dropout=seg_head_dropout,
+            activation="relu",
+            intermediate_dim=seg_head_intermediate_dim,
+            num_classes=2,
+        )
+        # Will append punctuation embeddings sentence boundary predictions
+        self._cap_head: ClassificationHead = ClassificationHead(
+            encoded_dim=encoder_dim + 1,
+            num_layers=cap_head_n_layers,
+            dropout=cap_head_dropout,
+            activation="relu",
+            intermediate_dim=cap_head_intermediate_dim,
+            num_classes=max_subword_length,
+        )
+
+    @typecheck()
+    def forward(
+        self,
+        encoded: torch.Tensor,
+        mask: torch.Tensor,
+        punc_targets: Optional[torch.Tensor] = None,
+        seg_targets: Optional[torch.Tensor] = None,
+    ):
+        # [B, T, C]
+        punct_logits_post = self._punct_head_post(encoded=encoded)
+        # [B, T, C]
+        punct_logits_pre = self._punct_head_pre(encoded=encoded)
+
+        # At training time, we get the reference punctuation targets to teacher-force the other heads.
+        # At inference time, use the model's predictions.
+        if punc_targets is None:
+            # [B, T, C] -> [B, T] Note - no need to detach because this should not happen in train mode.
+            punc_targets = punct_logits_post.argmax(dim=-1)
+            # for checking effect of embeddings, set this at test time
+            # punc_targets.fill_(2)
+        # [B, T, emb_dim]
+        embs = self._punct_emb(punc_targets)
+        # Concatenate the punctuation embeddings to the input
+        # [B, T, D + emb_dim]
+        encoded_with_embs = torch.cat((encoded, embs), dim=-1)
+        # [B, T, 2]
+        seg_logits = self._seg_head(encoded=encoded_with_embs)
+
+        # In inference mode, generate the sentence boundary predictions
+        if seg_targets is None:
+            seg_targets = seg_logits.argmax(dim=-1)
+        # For consistency, set the first token slot (BOS) to 1 (effectively a sentence boundary)
+        seg_targets[:, 0] = 1
+        # Shift the targets right by one, to indicate which tokens are the beginning of a sentence rather than the end.
+        seg_targets = torch.nn.functional.pad(seg_targets, pad=[1, 0])
+        # Trim the right because we padded left
+        seg_targets = seg_targets[:, :-1]
+        # Note that the seg targets contain -100 (ignore_idx) in BOS/EOS positions, but BOS is overwritten and EOS
+        # is shifted right, into the padding region.
+        # [B, T] -> [B, T, 1]
+        seg_targets = seg_targets.unsqueeze(-1)
+        # Concatenate the shifted sentence boundary predictions for the truecase head
+        cap_head_input = torch.cat((encoded, seg_targets), dim=-1)
         # [B, T, max_subword_len]
         cap_logits = self._cap_head(encoded=cap_head_input)
 

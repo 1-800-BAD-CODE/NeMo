@@ -55,7 +55,7 @@ model:
       type_vocab_size: 1
 
   decoder:
-    _target_: nemo.collections.nlp.modules.token_classification.MHAPunctCapSegDecoder
+    _target_: nemo.collections.nlp.modules.token_classification.ConditionedPCSDecoder
     punct_num_classes_post: null  # will get set by model
     punct_num_classes_pre: null  # will get set by model
     max_subword_length: null  # will get set by model
@@ -64,14 +64,12 @@ model:
     punct_head_dropout: 0.1
     seg_head_dropout: 0.1
     cap_head_n_layers: 2
+    punct_head_n_layers: 2
+    seg_head_n_layers: 2
     cap_head_intermediate_dim: 128
-    punct_head_n_layers: 1
-    seg_head_n_layers: 1
+    seg_head_intermediate_dim: 128
+    punct_head_intermediate_dim: 256
     emb_dim: 4
-    transformer_num_layers: 2
-    transformer_inner_size: 2048
-    transformer_num_heads: 4
-    transformer_ffn_dropout: 0.1
     post_punct_null_idx: 0  # TODO should be set by model
 
   null_punct_token: "<NULL>"
@@ -98,12 +96,12 @@ model:
       weight: 1.0  # BCE - only positive class weight
     # Loss weights for [no_stop, full_stop]
     seg:
-      weight: [ 0.5, 1.5 ]
+      weight: [ 0.5, 2.5 ]
   # Target padding value. No need to change.
   pad_value: -100
 
   train_ds:
-    batch_size: 128
+    batch_size: 256
     num_workers: 12
     # A list of datasets will be used to create a ConcatMapDataset.
     sampling_technique: "temperature"
@@ -113,14 +111,14 @@ model:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
       min_lines_per_eg: 1
-      max_lines_per_eg: 20
+      max_lines_per_eg: 12
       max_length: ${model.max_length}
       truncate_max_tokens: 0
       max_input_lines: null
     # Typically, set up one data set per language.
     datasets:
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
-        text_files: "/home/ubuntu/data/en.train.txt"
+        text_files: "/home/ubuntu/en_data/en.train.txt"
         language: "en"
 
   validation_ds:
@@ -131,19 +129,19 @@ model:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
       min_lines_per_eg: 1
-      max_lines_per_eg: 8
+      max_lines_per_eg: 12
       max_length: ${model.max_length}
       truncate_max_tokens: 0
       rng_seed: 12345
       max_input_lines: null
     datasets:
       - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
-        text_files: "/home/ubuntu/data/en.dev.txt"
+        text_files: "/home/ubuntu/en_data/en.dev.txt"
         language: "en"
 
   optim:
     name: adam
-    lr: 2e-5
+    lr: 5e-5
     sched:
       name: WarmupAnnealing
       min_lr: 1e-6
@@ -161,7 +159,7 @@ trainer:
   accelerator: auto
   strategy: ddp
   num_sanity_val_steps: 1
-  log_every_n_steps: 300  # Interval of logging.
+  log_every_n_steps: 100  # Interval of logging.
   val_check_interval: 1000
   resume_from_checkpoint: null
   logger: false
