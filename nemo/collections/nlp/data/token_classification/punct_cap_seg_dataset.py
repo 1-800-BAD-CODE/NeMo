@@ -22,8 +22,6 @@ class InferencePunctCapSegDataset(Dataset):
         input_texts: An optional list of one or more strings to run inference on.
         input_file: An optional file to read lines from. Should be mutually exclusive with `input_texts`.
         max_length: The maximum length for inputs. Longer inputs will be split into multiple batch elements.
-        fold_overlap: When folding long sequences, repeat this many tokens from the end of the previous split into the
-            beginning of the next split.
     """
 
     def __init__(
@@ -84,7 +82,7 @@ class InferencePunctCapSegDataset(Dataset):
         input_ids_list: List[List[int]] = [x[0] for x in batch]
         lengths = torch.tensor([len(x) for x in input_ids_list])
         # Add 2 for BOS and EOS, clamp at max length
-        lengths = lengths.add(2).clamp(self._max_length)
+        lengths = lengths.add(2).clamp(max=self._max_length)
         bos = self._tokenizer.bos_id  # noqa
         eos = self._tokenizer.eos_id  # noqa
         input_ids = torch.full(
