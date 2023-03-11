@@ -1,14 +1,5 @@
 name: "punct_cap_seg_en"
-init_from_nemo_model:
-  model0:
-    path: /home/ubuntu/tmp.nemo
-    exclude: [
-      "_decoder._punct_head_pre",
-      "_decoder._punct_head_post",
-      "_punct_pre_loss",
-      "_punct_post_loss",
-      "_decoder._punct_emb",
-    ]
+init_from_nemo_model: /home/ubuntu/tmp.nemo
 
 model:
   # For reference only
@@ -60,9 +51,9 @@ model:
     punct_num_classes_pre: null  # will get set by model
     max_subword_length: null  # will get set by model
     encoder_dim: ${model.language_model.config.hidden_size}
-    cap_head_dropout: 0.1
+    cap_head_dropout: 0.0
     punct_head_dropout: 0.1
-    seg_head_dropout: 0.1
+    seg_head_dropout: 0.0
     cap_head_n_layers: 2
     punct_head_n_layers: 2
     seg_head_n_layers: 2
@@ -110,9 +101,10 @@ model:
     common:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
+      # With 'spe_32k_lc_en.model' the average sentence is 19 tokens (including punc)
       min_lines_per_eg: 1
-      max_lines_per_eg: 12
-      max_length: ${model.max_length}
+      max_lines_per_eg: 14
+      max_length: 256 # ${model.max_length}
       truncate_max_tokens: 0
       max_input_lines: null
     # Typically, set up one data set per language.
@@ -130,7 +122,7 @@ model:
       punct_post_labels: ${model.punct_post_labels}
       min_lines_per_eg: 1
       max_lines_per_eg: 12
-      max_length: ${model.max_length}
+      max_length: 256 # ${model.max_length}
       truncate_max_tokens: 0
       rng_seed: 12345
       max_input_lines: null
@@ -153,7 +145,7 @@ trainer:
   devices: -1
   num_nodes: 1
   max_epochs: -1
-  max_steps: 30000
+  max_steps: 40000
   accumulate_grad_batches: 1
   precision: bf16
   accelerator: auto
