@@ -61,7 +61,6 @@ model:
     seg_head_intermediate_dim: 128
     punct_head_intermediate_dim: 256
     emb_dim: 4
-    post_punct_null_idx: 0  # TODO should be set by model
 
   null_punct_token: "<NULL>"
   # Punctuation tokens that are predicted before each subword. Add "¡" here if using it.
