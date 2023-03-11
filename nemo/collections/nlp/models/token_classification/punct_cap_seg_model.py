@@ -626,6 +626,7 @@ class PunctCapSegModel(NLPModel):
 
     def _get_char_cap_preds(self, tokens: List[str], token_preds: List[List[int]]) -> List[int]:
         """Gathers character-level truecase predictions from subword predictions"""
+        print(f"{len(tokens)=} {len(token_preds)=}")
         char_preds: List[int] = []
         for token_num, token in enumerate(tokens):
             start = 0
@@ -715,11 +716,12 @@ class PunctCapSegModel(NLPModel):
             # Select the highest-scoring value. Set null index to very small value (in case it was 1.0)
             pre_probs = pre_logits.softmax(dim=-1)
             post_probs = post_logits.softmax(dim=-1)
-            for batch_idx, ids in enumerate(input_ids):
-                # note we strip BOS/EOS in all indexing
-                ids = ids.tolist()[1:-1]
-                tokens = self.tokenizer.ids_to_tokens(ids)
+            batch_size = input_ids.shape[0]
+            for batch_idx in range(batch_size):
                 length = lengths[batch_idx]
+                # note we strip BOS/EOS in all indexing
+                ids = input_ids[batch_idx, 1 : length - 1].tolist()
+                tokens = self.tokenizer.ids_to_tokens(ids)
                 cap_preds: List[List[int]] = cap_probs[batch_idx, 1 : length - 1].gt(0.5).tolist()
                 seg_preds: List[int] = seg_probs[batch_idx, 1 : length - 1].gt(0.5).tolist()
                 pre_preds: List[int] = pre_probs[batch_idx, 1 : length - 1].argmax(dim=-1).tolist()
