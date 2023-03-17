@@ -459,7 +459,7 @@ class PunctCapSegModel(NLPModel):
         metrics["seg_report"](seg_preds[seg_mask], seg_targets[seg_mask])
 
     def _test_step(self, batch: Tuple, dataloader_idx: int = 0) -> None:
-        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch, testing=False)
+        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch, testing=True)
         _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
         # Prepare masks
         cap_mask = cap_targets.ne(self._ignore_idx)
@@ -514,12 +514,11 @@ class PunctCapSegModel(NLPModel):
             if language in self._log_val_metrics_for:
                 logging.info(f"{analytic} report for '{language}': {report}")
 
-    # TODO re-enable these, in the case of using only one language.
-    #   When using multiple data loaders, uncommenting these will break eval.
-    #   When using one data loader, commenting these will break eval.
-    def validation_epoch_end(self, outputs) -> None:
-        # Always use multi implementation and just use index 0.
-        self.multi_validation_epoch_end(outputs=outputs, dataloader_idx=0)
+    # FIXME if this is uncommented, using multiple val data loaders will fail. If this is commented, using only one
+    #  val data loader will fail. Currently toggled manually based on the recipe being run.
+    # def validation_epoch_end(self, outputs) -> None:
+    #     # Always use multi implementation and just use index 0.
+    #     self.multi_validation_epoch_end(outputs=outputs, dataloader_idx=0)
 
     def test_epoch_end(self, outputs) -> None:
         # Compute, reset, and log the precision/recall/f1 for punct/cap/seg for this threshold
@@ -626,7 +625,6 @@ class PunctCapSegModel(NLPModel):
 
     def _get_char_cap_preds(self, tokens: List[str], token_preds: List[List[int]]) -> List[int]:
         """Gathers character-level truecase predictions from subword predictions"""
-        print(f"{len(tokens)=} {len(token_preds)=}")
         char_preds: List[int] = []
         for token_num, token in enumerate(tokens):
             start = 0
