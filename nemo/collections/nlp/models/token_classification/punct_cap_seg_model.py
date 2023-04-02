@@ -40,8 +40,8 @@ class PunctCapSegModel(NLPModel):
         self._punct_pre_token_to_index: Dict[str, int] = {token: i for i, token in enumerate(self._punct_pre_labels)}
         self._punct_post_token_to_index: Dict[str, int] = {token: i for i, token in enumerate(self._punct_post_labels)}
         # Resolve index of null token
-        self._null_punct_pre_index: int = self._punct_pre_token_to_index[NULL_PUNCT_TOKEN]
         self._null_punct_post_index: int = self._punct_post_token_to_index[NULL_PUNCT_TOKEN]
+        self._using_pre_punct = len(self._punct_pre_labels) > 0
 
         # Used for loss masking. Should by synchronized with data sets.
         self._ignore_idx: int = self._cfg.get("ignore_idx", -100)
@@ -59,7 +59,7 @@ class PunctCapSegModel(NLPModel):
         self._punct_pre_loss: CrossEntropyLoss = CrossEntropyLoss(
             weight=cfg.loss.punct_pre.get("weight"), ignore_index=self._ignore_idx, logits_ndim=3
         )
-        # [B, T, num_post_punct, max_chars_per_subword]
+        # [B, T, num_post_punct]
         self._punct_post_loss: CrossEntropyLoss = CrossEntropyLoss(
             weight=cfg.loss.punct_post.get("weight"), ignore_index=self._ignore_idx, logits_ndim=3
         )
@@ -238,12 +238,6 @@ class PunctCapSegModel(NLPModel):
             metrics: nn.ModuleDict = nn.ModuleDict(
                 {
                     "loss": GlobalAverageLossMetric(dist_sync_on_step=False, take_avg_loss=True),
-                    "punct_pre_report": ClassificationReport(
-                        num_classes=len(self._punct_pre_labels),
-                        label_ids=self._punct_pre_token_to_index,
-                        mode="macro",
-                        dist_sync_on_step=False,
-                    ),
                     "punct_post_report": ClassificationReport(
                         num_classes=len(self._punct_post_labels),
                         label_ids=self._punct_post_token_to_index,
@@ -258,6 +252,14 @@ class PunctCapSegModel(NLPModel):
                     ),
                 }
             )
+            if self._using_pre_punct:
+                metrics["punct_pre_report"] = ClassificationReport(
+                    num_classes=len(self._punct_pre_labels),
+                    label_ids=self._punct_pre_token_to_index,
+                    mode="macro",
+                    dist_sync_on_step=False,
+                )
+
             module_list.append(metrics)
         if num_dl == 1:
             return module_list[0]
@@ -355,7 +357,7 @@ class PunctCapSegModel(NLPModel):
 
     def _run_step(self, batch: Tuple, testing: bool = False):
         # All inputs and targets are shape [B, T]
-        inputs, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
+        (inputs, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _,) = batch
         mask = inputs.ne(self.tokenizer.pad_id)
         # Encoded output is [B, T, D]
         encoded = self.bert_model(input_ids=inputs, attention_mask=mask, token_type_ids=None)
@@ -388,12 +390,12 @@ class PunctCapSegModel(NLPModel):
             # Dimensionless 0.0 like cap_logits
             cap_loss = cap_logits.new_zeros(1).squeeze()
 
-        loss = self._agg_loss.forward(loss_1=punct_pre_loss, loss_2=punct_post_loss, loss_3=cap_loss, loss_4=seg_loss)
+        loss = self._agg_loss.forward(loss_1=punct_pre_loss, loss_2=punct_post_loss, loss_3=cap_loss, loss_4=seg_loss,)
 
         return loss, punct_logits_pre, punct_logits_post, cap_logits, seg_logits
 
     def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int):
-        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch)
+        (loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits,) = self._run_step(batch)
         lr = self._optimizer.param_groups[0]["lr"]
         self.log("lr", lr, prog_bar=True)
         self.log("train_loss", loss)
@@ -419,9 +421,12 @@ class PunctCapSegModel(NLPModel):
 
         # Maybe log and reset batch metrics
         if batch_idx > 0 and batch_idx % self._trainer.log_every_n_steps == 0:
-            for analytic in ["punct_pre", "punct_post", "cap", "seg"]:
-                precision, recall, f1, report = self._train_metrics[f"{analytic}_report"].compute()
-                self._train_metrics[f"{analytic}_report"].reset()
+            # todo don't need keys iterate over all metrics (currently, loss is in the dict)
+            analytics = ["punct_pre", "punct_post", "cap", "seg"]
+            for analytic in analytics:
+                metric = self._train_metrics[f"{analytic}_report"]
+                precision, recall, f1, report = metric.compute()
+                metric.reset()
                 # For some analytics, NaN/inf are natural; e.g. uncased languages with no true-case targets.
                 if precision.isnan():
                     precision = torch.zeros_like(precision)
@@ -438,7 +443,7 @@ class PunctCapSegModel(NLPModel):
         return loss
 
     def _eval_step(self, batch: Tuple, dataloader_idx: int = 0) -> None:
-        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch)
+        (loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits,) = self._run_step(batch)
         _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
         # All log probs are [B, T, D]
         punct_pre_preds = punct_pre_logits.argmax(dim=-1)
@@ -452,14 +457,14 @@ class PunctCapSegModel(NLPModel):
         punct_pre_mask = punct_pre_targets.ne(self._ignore_idx)
         punct_post_mask = punct_post_targets.ne(self._ignore_idx)
         num_targets = punct_pre_mask.sum() + punct_post_mask.sum() + cap_mask.sum() + seg_mask.sum()
-        metrics["loss"](loss=loss, num_measurements=num_targets)
         metrics["punct_pre_report"](punct_pre_preds[punct_pre_mask], punct_pre_targets[punct_pre_mask])
         metrics["punct_post_report"](punct_post_preds[punct_post_mask], punct_post_targets[punct_post_mask])
         metrics["cap_report"](cap_preds, cap_targets[cap_mask])
         metrics["seg_report"](seg_preds[seg_mask], seg_targets[seg_mask])
+        metrics["loss"](loss=loss, num_measurements=num_targets)
 
     def _test_step(self, batch: Tuple, dataloader_idx: int = 0) -> None:
-        loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits = self._run_step(batch, testing=True)
+        (loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits,) = self._run_step(batch, testing=False)
         _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
         # Prepare masks
         cap_mask = cap_targets.ne(self._ignore_idx)
@@ -498,9 +503,11 @@ class PunctCapSegModel(NLPModel):
         self.log(f"val_{language}/loss", loss)
 
         # Compute, reset, and log the precision/recall/f1 for punct/cap/seg for this language
-        for analytic in ["punct_pre", "punct_post", "cap", "seg"]:
-            precision, recall, f1, report = metric_dict[f"{analytic}_report"].compute()
-            metric_dict[f"{analytic}_report"].reset()
+        analytics = ["punct_pre", "punct_post", "cap", "seg"]
+        for analytic in analytics:
+            metric = metric_dict[f"{analytic}_report"]
+            precision, recall, f1, report = metric.compute()
+            metric.reset()
             # For some analytics, NaN/inf are natural; e.g. uncased languages with no true-case targets.
             if precision.isnan():
                 precision = torch.zeros_like(precision)
@@ -522,7 +529,8 @@ class PunctCapSegModel(NLPModel):
 
     def test_epoch_end(self, outputs) -> None:
         # Compute, reset, and log the precision/recall/f1 for punct/cap/seg for this threshold
-        for analytic in ["punct_pre", "punct_post", "cap", "seg"]:
+        analytics = ["punct_pre", "punct_post", "cap", "seg"]
+        for analytic in analytics:
             precision, recall, f1, report = self._test_metrics[f"{analytic}_report"].compute()
             self._test_metrics[f"{analytic}_report"].reset()
             self.log(f"test_{analytic}_precision", precision)
@@ -566,12 +574,13 @@ class PunctCapSegModel(NLPModel):
 
     @property
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
-        return {
+        outputs = {
             "pre_preds": NeuralType(("B", "T", "C"), LogitsType()),
             "post_preds": NeuralType(("B", "T", "C"), LogitsType()),
             "cap_preds": NeuralType(("B", "T", "D"), LogitsType()),  # D == max_subword_length
             "seg_preds": NeuralType(("B", "T"), LogitsType()),  # C == 2
         }
+        return outputs
 
     def input_example(
         self, min_batch_size: int = 2, max_batch_size: int = 32, min_seq_length: int = 20, max_seq_length: int = 128,

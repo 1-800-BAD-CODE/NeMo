@@ -113,6 +113,10 @@ class PunctCapSegDataset(Dataset):
 
     def __init__(
         self,
+        punct_pre_labels: List[str],
+        punct_post_labels: List[str],
+        open_quote_labels: List[str],
+        end_quote_labels: List[str],
         language: str = "unk",
         is_continuous: bool = None,
         tokenizer: Optional[TokenizerSpec] = None,
@@ -123,6 +127,8 @@ class PunctCapSegDataset(Dataset):
         super().__init__()
         self._language = language
         self._target_pad_value = target_pad_value
+        self._punct_pre_labels = punct_pre_labels
+        self._punct_post_labels = punct_post_labels
         # If not explicitly set, make the inference.
         self._is_continuous = is_continuous if (is_continuous is not None) else (language in {"zh", "ja", "my"})
         self._rng_seed = rng_seed
@@ -256,7 +262,14 @@ class PuncTargetsGenerator(abc.ABC):
         pre_labels: Punctuation labels that can appear before subwords.
     """
 
-    def __init__(self, post_labels: List[str], pre_labels: List[str], ignore_index: int = -100,) -> None:
+    def __init__(
+        self,
+        post_labels: List[str],
+        pre_labels: List[str],
+        open_quote_labels: List[str],
+        end_quote_labels: List[str],
+        ignore_index: int = -100,
+    ) -> None:
         self._ignore_index = ignore_index
 
         self._pre_label_to_index = {label: i for i, label in enumerate(pre_labels)}
@@ -300,63 +313,27 @@ class PuncTargetsGenerator(abc.ABC):
         # Catch all the special languages, and default to the English-like punctuation processor.
         if lang_code in {"es", "ast"}:
             # Spanish and Asturian use inverted ?!
-            return SpanishPuncTargetsGenerator(pre_labels=pre_labels, post_labels=post_labels)
+            # Basic generator works ok, just be sure there are no "pre" tokens in languages that don't use it.
+            return BasicPuncTargetsGenerator(
+                pre_labels=pre_labels, post_labels=post_labels, open_quote_labels=[], end_quote_labels=[]
+            )
         elif lang_code in {"zh", "ja", "my"}:
             # Continuous-script languages. The "basic" class seems to work, so nothing special is implemented yet.
-            return BasicPuncTargetsGenerator(pre_labels=pre_labels, post_labels=post_labels)
+            return BasicPuncTargetsGenerator(
+                pre_labels=pre_labels, post_labels=post_labels, open_quote_labels=[], end_quote_labels=[]
+            )
         elif lang_code in {"th"}:
             # Thai -- uses space as punctuation. Don't have a solution, yet.
             raise ValueError(f"Language not supported: {lang_code}")
         else:
             # Assume all other languages use English-like punctuation rules.
-            return BasicPuncTargetsGenerator(pre_labels=pre_labels, post_labels=post_labels)
+            return BasicPuncTargetsGenerator(
+                pre_labels=pre_labels, post_labels=post_labels, open_quote_labels=[], end_quote_labels=[]
+            )
 
 
 class BasicPuncTargetsGenerator(PuncTargetsGenerator):
-    """Punctuation example generator suitable for most languages, including English.
-
-    This class assumes that punctuation tokens appear only after subwords, and will work for most languages.
-
-    """
-
-    def generate_targets(self, input_text: str) -> Tuple[str, List[int], List[int]]:
-        # Normalize whitespaces
-        input_text = re.sub(r"\s+", " ", input_text)
-        # Empty outputs
-        out_chars: List[str] = []
-        post_targets: List[int] = []
-        if self._using_acronyms:
-            period_or_acronym_index = [self._post_label_to_index["."], self._post_label_to_index[ACRONYM_TOKEN]]
-        for input_char in input_text:
-            # No targets for spaces because they are ignored when generating subtokens
-            if input_char == " ":
-                out_chars.append(" ")
-                continue
-            # Either create a target, or append to the input
-            if post_targets and input_char in self._post_labels:
-                # If two consecutive non-space chars end with '.', both are acronyms
-                # There's probably a more graceful way to implement this check.
-                if (
-                    self._using_acronyms
-                    and input_char == "."
-                    and len(post_targets) > 1
-                    and out_chars[-2] != " "
-                    and post_targets[-2] in period_or_acronym_index  # noqa
-                ):
-                    post_targets[-2] = self._post_label_to_index[ACRONYM_TOKEN]
-                    post_targets[-1] = self._post_label_to_index[ACRONYM_TOKEN]
-                else:
-                    post_targets[-1] = self._post_label_to_index[input_char]
-            else:
-                out_chars.append(input_char)
-                post_targets.append(self._post_null_index)
-        pre_targets = [self._pre_null_index] * len(post_targets)
-        out_text = "".join(out_chars)
-        return out_text, pre_targets, post_targets
-
-
-class SpanishPuncTargetsGenerator(PuncTargetsGenerator):
-    """Punctuation example generator for Spanish and Asturian.
+    """Punctuation example generator that works for most languages.
 
     """
 
@@ -475,6 +452,8 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         language: str,
         punct_pre_labels: List[str],
         punct_post_labels: List[str],
+        open_quote_labels: List[str],
+        end_quote_labels: List[str],
         is_continuous: Optional[bool] = None,
         tokenizer: Optional[TokenizerSpec] = None,
         max_length: int = 512,
@@ -489,6 +468,10 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
     ):
         super().__init__(
             language=language,
+            punct_post_labels=punct_post_labels,
+            punct_pre_labels=punct_pre_labels,
+            open_quote_labels=open_quote_labels,
+            end_quote_labels=end_quote_labels,
             tokenizer=tokenizer,
             target_pad_value=target_pad_value,
             rng_seed=rng_seed,
@@ -496,8 +479,6 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         )
         self._text_files = [text_files] if isinstance(text_files, str) else text_files
         self._max_length = max_length
-        self._punct_pre_labels = punct_pre_labels
-        self._punct_post_labels = punct_post_labels
         self._max_lines_per_eg = max_lines_per_eg
         self._min_lines_per_eg = min_lines_per_eg
         self._prob_truncate = prob_truncate
@@ -532,8 +513,11 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         pad = self._target_pad_value
         pad_list = [[pad] * self._max_token_len]
 
-        # Randomly choose how many additional lines to use
-        num_extra_lines = self._rng.integers(self._min_lines_per_eg - 1, self._max_lines_per_eg)
+        # Randomly choose how many additional lines to use. During testing we may fix the values
+        if self._min_lines_per_eg == self._max_lines_per_eg:
+            num_extra_lines = self._min_lines_per_eg - 1
+        else:
+            num_extra_lines = self._rng.integers(self._min_lines_per_eg - 1, self._max_lines_per_eg)
         extra_indices = list(self._rng.integers(low=0, high=len(self), size=num_extra_lines))
         # Randomly select additional indices to use
         indices_to_use = [idx] + extra_indices
