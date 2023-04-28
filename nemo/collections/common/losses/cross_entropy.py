@@ -43,7 +43,7 @@ class CrossEntropyLoss(nn.CrossEntropyLoss, Serialization, Typing):
         """
         return {"loss": NeuralType(elements_type=LossType())}
 
-    def __init__(self, logits_ndim=2, weight=None, reduction='mean', ignore_index=-100):
+    def __init__(self, logits_ndim=2, weight=None, reduction='mean', ignore_index=-100, label_smoothing=0.0):
         """
         Args:
             logits_ndim (int): number of dimensions (or rank) of the logits tensor
@@ -53,7 +53,7 @@ class CrossEntropyLoss(nn.CrossEntropyLoss, Serialization, Typing):
         if weight is not None and not torch.is_tensor(weight):
             weight = torch.FloatTensor(weight)
             logging.info(f"Weighted Cross Entropy loss with weight {weight}")
-        super().__init__(weight=weight, reduction=reduction, ignore_index=ignore_index)
+        super().__init__(weight=weight, reduction=reduction, ignore_index=ignore_index, label_smoothing=label_smoothing)
         self._logits_dim = logits_ndim
 
     @typecheck()
