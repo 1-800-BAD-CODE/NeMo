@@ -115,8 +115,6 @@ class PunctCapSegDataset(Dataset):
         self,
         punct_pre_labels: List[str],
         punct_post_labels: List[str],
-        open_quote_labels: List[str],
-        end_quote_labels: List[str],
         language: str = "unk",
         is_continuous: bool = None,
         tokenizer: Optional[TokenizerSpec] = None,
@@ -262,14 +260,7 @@ class PuncTargetsGenerator(abc.ABC):
         pre_labels: Punctuation labels that can appear before subwords.
     """
 
-    def __init__(
-        self,
-        post_labels: List[str],
-        pre_labels: List[str],
-        open_quote_labels: List[str],
-        end_quote_labels: List[str],
-        ignore_index: int = -100,
-    ) -> None:
+    def __init__(self, post_labels: List[str], pre_labels: List[str], ignore_index: int = -100,) -> None:
         self._ignore_index = ignore_index
 
         self._pre_label_to_index = {label: i for i, label in enumerate(pre_labels)}
@@ -314,22 +305,16 @@ class PuncTargetsGenerator(abc.ABC):
         if lang_code in {"es", "ast"}:
             # Spanish and Asturian use inverted ?!
             # Basic generator works ok, just be sure there are no "pre" tokens in languages that don't use it.
-            return BasicPuncTargetsGenerator(
-                pre_labels=pre_labels, post_labels=post_labels, open_quote_labels=[], end_quote_labels=[]
-            )
+            return BasicPuncTargetsGenerator(pre_labels=pre_labels, post_labels=post_labels)
         elif lang_code in {"zh", "ja", "my"}:
             # Continuous-script languages. The "basic" class seems to work, so nothing special is implemented yet.
-            return BasicPuncTargetsGenerator(
-                pre_labels=pre_labels, post_labels=post_labels, open_quote_labels=[], end_quote_labels=[]
-            )
+            return BasicPuncTargetsGenerator(pre_labels=pre_labels, post_labels=post_labels)
         elif lang_code in {"th"}:
             # Thai -- uses space as punctuation. Don't have a solution, yet.
             raise ValueError(f"Language not supported: {lang_code}")
         else:
             # Assume all other languages use English-like punctuation rules.
-            return BasicPuncTargetsGenerator(
-                pre_labels=pre_labels, post_labels=post_labels, open_quote_labels=[], end_quote_labels=[]
-            )
+            return BasicPuncTargetsGenerator(pre_labels=pre_labels, post_labels=post_labels)
 
 
 class BasicPuncTargetsGenerator(PuncTargetsGenerator):
@@ -452,8 +437,6 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         language: str,
         punct_pre_labels: List[str],
         punct_post_labels: List[str],
-        open_quote_labels: List[str],
-        end_quote_labels: List[str],
         is_continuous: Optional[bool] = None,
         tokenizer: Optional[TokenizerSpec] = None,
         max_length: int = 512,
@@ -470,8 +453,6 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
             language=language,
             punct_post_labels=punct_post_labels,
             punct_pre_labels=punct_pre_labels,
-            open_quote_labels=open_quote_labels,
-            end_quote_labels=end_quote_labels,
             tokenizer=tokenizer,
             target_pad_value=target_pad_value,
             rng_seed=rng_seed,
@@ -568,8 +549,8 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
 
         # Finalize the truecase/sentence boundary inputs and targets
         # Fold true-case targets into subword-based
-        cap_targets = self._fold_char_targets(input_tokens, cap_target_indices)
         # Trim if too long
+        cap_targets = self._fold_char_targets(input_tokens, cap_target_indices)
         input_ids = self.tokenizer.tokens_to_ids(input_tokens)
         if len(input_ids) + 2 > self._max_length:
             input_ids = input_ids[: self._max_length - 2]
