@@ -13,8 +13,6 @@
 # limitations under the License.
 
 import os
-from typing import List, Optional
-
 from transformers import (
     ALBERT_PRETRAINED_MODEL_ARCHIVE_LIST,
     ALL_PRETRAINED_CONFIG_ARCHIVE_MAP,
@@ -23,6 +21,7 @@ from transformers import (
     DISTILBERT_PRETRAINED_MODEL_ARCHIVE_LIST,
     GPT2_PRETRAINED_MODEL_ARCHIVE_LIST,
     ROBERTA_PRETRAINED_MODEL_ARCHIVE_LIST,
+    XLM_ROBERTA_PRETRAINED_MODEL_ARCHIVE_LIST,
     AlbertConfig,
     AutoModel,
     BertConfig,
@@ -30,7 +29,9 @@ from transformers import (
     DistilBertConfig,
     GPT2Config,
     RobertaConfig,
+    XLMRobertaConfig,
 )
+from typing import List, Optional
 
 from nemo.collections.nlp.modules.common.huggingface.albert import AlbertEncoder
 from nemo.collections.nlp.modules.common.huggingface.bert import BertEncoder
@@ -41,7 +42,6 @@ from nemo.collections.nlp.modules.common.huggingface.roberta import RobertaEncod
 from nemo.utils import logging
 
 __all__ = ["get_huggingface_lm_model", "get_huggingface_pretrained_lm_models_list", "VOCAB_FILE_NAME"]
-
 
 HUGGINGFACE_MODELS = {
     "BertModel": {
@@ -68,6 +68,12 @@ HUGGINGFACE_MODELS = {
         "config": RobertaConfig,
         "pretrained_model_list": ROBERTA_PRETRAINED_MODEL_ARCHIVE_LIST,
     },
+    "XLMRobertaModel": {
+        "default": "xlm-roberta-base",
+        "class": RobertaEncoder,
+        "config": XLMRobertaConfig,
+        "pretrained_model_list": XLM_ROBERTA_PRETRAINED_MODEL_ARCHIVE_LIST,
+    },
     "AlbertModel": {
         "default": "albert-base-v2",
         "class": AlbertEncoder,
@@ -85,6 +91,7 @@ HUGGINGFACE_MODELS = {
 VOCAB_FILE_NAME = {
     "AlbertTokenizer": "spiece.model",
     "RobertaTokenizer": "vocab.json",
+    "XLMRobertaTokenizer": "sentencepiece.bpe.model",
     "BertTokenizer": "vocab.txt",
     "DistilBertTokenizer": "vocab.txt",
     "CamembertTokenizer": "sentencepiece.bpe.model",
@@ -109,7 +116,7 @@ def get_huggingface_lm_model(
     Returns:
         BertModule
     """
-    if "model_type" in config_dict:
+    if config_dict is not None and "model_type" in config_dict:
         model_type = config_dict["model_type"]
         del config_dict["model_type"]
     else:
