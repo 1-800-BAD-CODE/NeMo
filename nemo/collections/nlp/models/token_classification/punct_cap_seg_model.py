@@ -8,7 +8,6 @@ from typing import Dict, List, Optional, Tuple, Union
 from nemo.collections.common.data import ConcatMapDataset
 from nemo.collections.common.losses import AggregatorLoss, CrossEntropyLoss
 from nemo.collections.common.metrics import GlobalAverageLossMetric
-from nemo.collections.common.tokenizers import SentencePieceTokenizer
 from nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset import (
     InferencePunctCapSegDataset,
     PunctCapSegDataset,
@@ -47,7 +46,7 @@ class PunctCapSegModel(NLPModel):
         self._ignore_idx: int = self._cfg.get("ignore_idx", -100)
 
         # Used for making character-level predictions with subwords (predict max_token_len per token)
-        self._using_sp = isinstance(self.tokenizer, SentencePieceTokenizer)
+        self._using_sp = True  # isinstance(self.tokenizer, SentencePieceTokenizer)
         if not self._using_sp:
             self._max_token_len = max(len(x) for x in self.tokenizer.vocab)
         else:
@@ -57,15 +56,24 @@ class PunctCapSegModel(NLPModel):
 
         # [B, T, num_pre_punct]
         self._punct_pre_loss: CrossEntropyLoss = CrossEntropyLoss(
-            weight=cfg.loss.punct_pre.get("weight"), ignore_index=self._ignore_idx, logits_ndim=3
+            weight=cfg.loss.punct_pre.get("weight"),
+            ignore_index=self._ignore_idx,
+            logits_ndim=3,
+            label_smoothing=cfg.loss.punct_pre.get("label_smoothing", 0.0),
         )
         # [B, T, num_post_punct]
         self._punct_post_loss: CrossEntropyLoss = CrossEntropyLoss(
-            weight=cfg.loss.punct_post.get("weight"), ignore_index=self._ignore_idx, logits_ndim=3
+            weight=cfg.loss.punct_post.get("weight"),
+            ignore_index=self._ignore_idx,
+            logits_ndim=3,
+            label_smoothing=cfg.loss.punct_post.get("label_smoothing", 0.0),
         )
         # [B, T, 2] binary preds
         self._seg_loss: CrossEntropyLoss = CrossEntropyLoss(
-            weight=cfg.loss.seg.get("weight"), ignore_index=self._ignore_idx, logits_ndim=3
+            weight=cfg.loss.seg.get("weight"),
+            ignore_index=self._ignore_idx,
+            logits_ndim=3,
+            label_smoothing=cfg.loss.seg.get("label_smoothing", 0.0),
         )
         # [B, T, max_chars_per_subword]
         # For true-casing, we use multi-label classification to predict for each char in a subword
@@ -105,107 +113,6 @@ class PunctCapSegModel(NLPModel):
     def register_bert_model(self):
         # Base class implementation is buggy and unnecessary for non-Riva users... disable it.
         pass
-
-    def maybe_init_from_pretrained_checkpoint(self, cfg: DictConfig, map_location: str = "cpu"):
-        orig = self.bert_model.config.max_position_embeddings
-        if cfg.get("init_from_nemo_model") is not None:
-            restored_model: PunctCapSegModel
-            with open_dict(cfg):
-                if isinstance(cfg.init_from_nemo_model, str):
-                    model_path = cfg.init_from_nemo_model
-                    restored_model = self.restore_from(
-                        model_path, map_location=map_location, strict=cfg.get("init_strict", True)  # noqa
-                    )
-                    self.load_state_dict(restored_model.state_dict(), strict=False)
-                    logging.info(f"Model checkpoint restored from nemo file with path : `{model_path}`")
-                elif isinstance(cfg.init_from_nemo_model, (DictConfig, dict)):
-                    for model_load_cfg in cfg.init_from_nemo_model.values():
-                        model_path = model_load_cfg.path
-                        restored_model = self.restore_from(
-                            model_path, map_location=map_location, strict=cfg.get("init_strict", True)  # noqa
-                        )
-                        self.load_part_of_state_dict(
-                            state_dict=restored_model.state_dict(),
-                            include=model_load_cfg.pop("include", [""]),
-                            exclude=model_load_cfg.pop("exclude", []),
-                            load_from_string=f"nemo file with path `{model_path}`",
-                        )
-                else:
-                    raise TypeError("Invalid type: init_from_nemo_model is not a string or a dict!")
-            # The rest of this function restores weights for certain layers that can change shape (embs, labels) or
-            # be shuffled (vocab). It's a little hacky and presumptive.
-            with torch.inference_mode():
-                # If "post" punctuation differs, transfer as many weights as possible
-                if self._punct_post_labels != restored_model._punct_post_labels:
-                    old_label_to_idx: Dict[str, int] = {
-                        label: idx for idx, label in enumerate(restored_model._punct_post_labels)
-                    }
-                    # This assumes some things about the decoder architecture
-                    old_weight = restored_model._decoder._punct_head_post._linears[0].weight
-                    old_bias = restored_model._decoder._punct_head_post._linears[0].bias
-                    old_emb = restored_model._decoder._punct_emb.weight
-                    for i, label in enumerate(self._punct_post_labels):
-                        if label in old_label_to_idx:
-                            old_idx = old_label_to_idx[label]
-                            logging.info(f"Map label {label} from index {old_idx} to index {i}")
-                            self._decoder._punct_head_post._linears[0].weight[i] = old_weight[old_idx]
-                            self._decoder._punct_head_post._linears[0].bias[i] = old_bias[old_idx]
-                            self._decoder._punct_emb.weight[i] = old_emb[old_idx]
-                # If "pre" punctuation differs, transfer as many weights as possible
-                if self._punct_pre_labels != restored_model._punct_pre_labels:
-                    # Probably won't ever happen
-                    pass
-                # Mess with the embeddings
-                """
-                >>> m.bert_model.embeddings
-                BertEmbeddings(
-                  (word_embeddings): Embedding(64000, 512, padding_idx=0)
-                  (position_embeddings): Embedding(128, 512)
-                  (token_type_embeddings): Embedding(1, 512)
-                  (LayerNorm): LayerNorm((512,), eps=1e-12, elementwise_affine=True)
-                  (dropout): Dropout(p=0.1, inplace=False)
-                )
-                """
-                # Allow a modified vocab, while preserving embeddings for known tokens
-                if self.tokenizer.vocab != restored_model.tokenizer.vocab and self._cfg.get(
-                    "init_partial_vocab", False
-                ):
-                    num_embeddings_restored = 0
-                    old_token_to_idx: Dict[str, int] = {
-                        token: idx for idx, token in enumerate(restored_model.tokenizer.vocab)
-                    }
-                    for i, token in enumerate(self.tokenizer.vocab):
-                        # We'll try to find this token, or a similar token, in the old vocab
-                        old_idx: Optional[int]
-                        if token in old_token_to_idx:
-                            # Exact token match
-                            old_idx = old_token_to_idx[token]
-                        elif token.startswith("▁"):
-                            # See if BOW token exists as an inter-word piece
-                            old_idx = old_token_to_idx.get(token[1:])
-                        else:
-                            # Check if token exists as BOW piece
-                            old_idx = old_token_to_idx.get(f"▁{token}")
-                        if old_idx is not None:
-                            self.bert_model.embeddings.word_embeddings.weight[
-                                old_idx
-                            ] = restored_model.bert_model.embeddings.word_embeddings.weight[old_idx]
-                            num_embeddings_restored += 1
-                    vocab_size = len(self.tokenizer.vocab)
-                    pct = num_embeddings_restored / vocab_size
-                    logging.info(f"Restored {num_embeddings_restored} of {vocab_size} ({pct:0.2%}) of token embeddings")
-                # Preserve positional embeddings when changing max length.
-                restored_max_len = restored_model.bert_model.embeddings.position_embeddings.weight.shape[0]
-                new_max_len = self.bert_model.embeddings.position_embeddings.weight.shape[0]
-                if new_max_len != restored_max_len:
-                    logging.info(f"Restoring positional embeddings from {restored_max_len} to {new_max_len}")
-                    for i in range(new_max_len):
-                        # If old model had fewer positions, extend the final embedding
-                        old_idx = min(i, restored_max_len - 1)
-                        self.bert_model.embeddings.position_embeddings.weight[
-                            i
-                        ] = restored_model.bert_model.embeddings.position_embeddings.weight[old_idx].clone()
-            del restored_model
 
     def setup_multiple_validation_data(self, val_data_config: Union[DictConfig, Dict]):
         self.setup_validation_data(val_data_config)
@@ -266,6 +173,8 @@ class PunctCapSegModel(NLPModel):
         return module_list
 
     def _setup_eval_dataloaders_from_config(self, cfg) -> List[torch.utils.data.DataLoader]:
+        if cfg is None:
+            return None
         dataloaders: List[torch.utils.data.DataLoader] = []
         for ds_config in cfg.datasets:
             # Add all common variables, if not set already
@@ -320,6 +229,8 @@ class PunctCapSegModel(NLPModel):
         return dataloader
 
     def _setup_train_dataloader_from_config(self, cfg) -> List[torch.utils.data.DataLoader]:
+        if cfg is None:
+            return None
         datasets: List[PunctCapSegDataset] = []
         for ds_config in cfg.datasets:
             # Add all common variables, if not set already
