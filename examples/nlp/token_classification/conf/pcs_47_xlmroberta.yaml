@@ -1,0 +1,467 @@
+name: "pcs47"
+
+# Note: rw not supported by xlm roberta but vocab sufficiently supported through other latin scripts
+
+model:
+  # For reference only
+  supported_languages: [
+    "af", "am", "ar", "bg", "bn", "de", "el", "en", "es", "et",
+    "fa", "fi", "fr", "gu", "hi", "hr", "hu", "id", "is", "it",
+    "ja", "kk", "kn", "ko", "ky", "lt", "lv", "mk", "ml", "mr",
+    "nl", "or", "pa", "pl", "ps", "pt", "ro", "ru", "rw", "so",
+    "sr", "sw", "ta", "te", "tr", "uk", "zh"
+  ]
+  # Print dev metrics to stdout during training for these languages
+  log_val_metrics_for:
+    - en
+  # Whether to print the training metrics to stdout every `trainer.log_every_n_steps`
+  log_train_metrics: true
+  # Accumulate batch metrics every this many steps. Useful for getting more data points into logging.
+  batch_metrics_every_n_steps: 5
+
+  max_length: 512
+
+  tokenizer:
+    tokenizer_name: sentencepiece
+    tokenizer_model: /home/ubuntu/sp_xlmroberta.model
+    vocab_file: null
+    special_tokens:
+      bos_token: "<s>"
+      eos_token: "</s>"
+      pad_token: "<pad>"
+      unk_token: "<unk>"
+
+  language_model:
+    config_file: null
+    pretrained_model_name: xlm-roberta-base
+    nemo_file: null
+    lm_checkpoint: null
+    vocab_file: null
+    config: null
+
+  decoder:
+    _target_: nemo.collections.nlp.modules.token_classification.ConditionedPCSDecoder
+    punct_num_classes_post: null  # will get set by model
+    punct_num_classes_pre: null  # will get set by model
+    max_subword_length: null  # will get set by model
+    encoder_dim: 768  # ${model.language_model.config.hidden_size}
+    cap_head_dropout: 0.0
+    punct_head_dropout: 0.1
+    seg_head_dropout: 0.0
+    cap_head_n_layers: 2
+    punct_head_n_layers: 2
+    seg_head_n_layers: 2
+    cap_head_intermediate_dim: 128
+    seg_head_intermediate_dim: 128
+    punct_head_intermediate_dim: 256
+    emb_dim: 4
+
+  null_punct_token: "<NULL>"
+  # Punctuation tokens that are predicted before each subword. Add "¡" here if using it.
+  punct_pre_labels: [ "<NULL>", "¿", ]
+  # Punctuation tokens that are predicted after each subword. Note the datasets below are configured to map the Chinese
+  # enumeration comma to a regular Chinese comma, due to inconsistencies in the raw data, so it is not learned.
+  punct_post_labels: [
+    "<NULL>", "<ACRONYM>",
+    ".", ",", "?",
+    "？", "，", "。", # Chinese, no enum comma
+    "、", "・",  # Japanese comma, middle dot
+    "।", # Hindi
+    "؟", "،",  # Arabic
+    ";",  # Greek question mark
+    "።", "፣", "፧",  # Amharic full stop, comma, question
+  ]
+  loss:
+    # Loss weights for [pre_punct, post_punct, cap, seg]
+    agg_loss_weights: [ 1, 1, 1, 1 ]
+    # Loss weights for punct_post_labels
+    punct_post:
+      # Weight for each positive example.
+      weight: [ 0.2673, 0.9973, 0.9250, 0.9346, 0.9865, 0.9935, 0.9486, 0.9472, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000 ]
+      label_smoothing: 0.1
+    # Loss weights for punct_pre_labels
+    punct_pre:
+      weight: [ 0.0140, 0.9860 ]
+      label_smoothing: 0.1
+    # Loss weights for [lower_case, upper_case]
+    cap:
+      weight: 1.0  # BCE - only positive class weight
+    # Loss weights for [no_stop, full_stop]
+    seg:
+      weight: [ 0.1173, 0.8827 ]
+      label_smoothing: 0.1
+  # Target padding value. No need to change.
+  pad_value: -100
+
+  train_ds:
+    batch_size: 64
+    num_workers: 12
+    # A list of datasets will be used to create a ConcatMapDataset.
+    sampling_technique: "temperature"
+    sampling_temperature: 5
+    # "common" key/value pairs will be added to every data set, unless that dataset already specifies the key.
+    common:
+      punct_pre_labels: ${model.punct_pre_labels}
+      punct_post_labels: ${model.punct_post_labels}
+      min_lines_per_eg: 1
+      max_lines_per_eg: 32
+      max_length: ${model.max_length}
+      truncate_max_tokens: 0
+      max_input_lines: null
+    # Typically, set up one data set per language.
+    datasets:
+      #      "af", "am", "ar", "bg", "bn", "de", "el", "en", "es", "et",
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/af.train.txt"
+        language: "af"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/am.train.txt"
+        language: "am"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ar.train.txt"
+        language: "ar"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/bg.train.txt"
+        language: "bg"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/bn.train.txt"
+        language: "bn"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/de.train.txt"
+        language: "de"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/el.train.txt"
+        language: "el"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/en.train.txt"
+        language: "en"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/es.train.txt"
+        language: "es"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/et.train.txt"
+        language: "et"
+        #  "fa", "fi", "fr", "gu", "hi", "hr", "hu", "id", "is", "it",
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/fa.train.txt"
+        language: "fa"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/fi.train.txt"
+        language: "fi"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/fr.train.txt"
+        language: "fr"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/gu.train.txt"
+        language: "gu"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/hi.train.txt"
+        language: "hi"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/hr.train.txt"
+        language: "hr"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/hu.train.txt"
+        language: "hu"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/id.train.txt"
+        language: "id"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/is.train.txt"
+        language: "is"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/it.train.txt"
+        language: "it"
+      #    "ja", "kk", "kn", "ko", "ky", "lt", "lv", "mk", "ml", "mr",
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ja.train.txt"
+        language: "ja"
+        is_continuous: true
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/kk.train.txt"
+        language: "kk"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/kn.train.txt"
+        language: "kn"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ko.train.txt"
+        language: "ko"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ky.train.txt"
+        language: "ky"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/lt.train.txt"
+        language: "lt"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/lv.train.txt"
+        language: "lv"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/mk.train.txt"
+        language: "mk"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ml.train.txt"
+        language: "ml"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/mr.train.txt"
+        language: "mr"
+        #   "nl", "or", "pa", "pl", "ps", "pt", "ro", "ru", "rw", "so",
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/nl.train.txt"
+        language: "nl"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/or.train.txt"
+        language: "or"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/pa.train.txt"
+        language: "pa"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/pl.train.txt"
+        language: "pl"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ps.train.txt"
+        language: "ps"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/pt.train.txt"
+        language: "pt"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ro.train.txt"
+        language: "ro"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ru.train.txt"
+        language: "ru"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/rw.train.txt"
+        language: "rw"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/so.train.txt"
+        language: "so"
+        #   "sr", "sw", "ta", "te", "tr", "uk", "zh"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/sr.train.txt"
+        language: "sr"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/sw.train.txt"
+        language: "sw"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ta.train.txt"
+        language: "ta"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/te.train.txt"
+        language: "te"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/tr.train.txt"
+        language: "tr"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/uk.train.txt"
+        language: "uk"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/zh.train.txt"
+        language: "zh"
+        is_continuous: true
+
+  validation_ds:
+    batch_size: 128
+    num_workers: 8
+    # "common" options are analogous to train_ds
+    common:
+      punct_pre_labels: ${model.punct_pre_labels}
+      punct_post_labels: ${model.punct_post_labels}
+      min_lines_per_eg: 1
+      max_lines_per_eg: 20
+      max_length: ${model.max_length}
+      truncate_max_tokens: 0
+      rng_seed: 12345
+      max_input_lines: null
+    datasets:
+      #      "af", "am", "ar", "bg", "bn", "de", "el", "en", "es", "et",
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/af.dev.txt"
+        language: "af"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/am.dev.txt"
+        language: "am"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ar.dev.txt"
+        language: "ar"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/bg.dev.txt"
+        language: "bg"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/bn.dev.txt"
+        language: "bn"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/de.dev.txt"
+        language: "de"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/el.dev.txt"
+        language: "el"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/en.dev.txt"
+        language: "en"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/es.dev.txt"
+        language: "es"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/et.dev.txt"
+        language: "et"
+        #    "fa", "fi", "fr", "gu", "hi", "hr", "hu", "id", "is", "it",
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/fa.dev.txt"
+        language: "fa"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/fi.dev.txt"
+        language: "fi"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/fr.dev.txt"
+        language: "fr"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/gu.dev.txt"
+        language: "gu"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/hi.dev.txt"
+        language: "hi"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/hr.dev.txt"
+        language: "hr"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/hu.dev.txt"
+        language: "hu"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/id.dev.txt"
+        language: "id"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/is.dev.txt"
+        language: "is"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/it.dev.txt"
+        language: "it"
+        #    "ja", "kk", "kn", "ko", "ky", "lt", "lv", "mk", "ml", "mr",
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ja.dev.txt"
+        language: "ja"
+        is_continuous: true
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/kk.dev.txt"
+        language: "kk"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/kn.dev.txt"
+        language: "kn"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ko.dev.txt"
+        language: "ko"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ky.dev.txt"
+        language: "ky"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/lt.dev.txt"
+        language: "lt"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/lv.dev.txt"
+        language: "lv"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/mk.dev.txt"
+        language: "mk"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ml.dev.txt"
+        language: "ml"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/mr.dev.txt"
+        language: "mr"
+        #   "nl", "or", "pa", "pl", "ps", "pt", "ro", "ru", "rw", "so",
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/nl.dev.txt"
+        language: "nl"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/or.dev.txt"
+        language: "or"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/pa.dev.txt"
+        language: "pa"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/pl.dev.txt"
+        language: "pl"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ps.dev.txt"
+        language: "ps"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/pt.dev.txt"
+        language: "pt"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ro.dev.txt"
+        language: "ro"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ru.dev.txt"
+        language: "ru"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/rw.dev.txt"
+        language: "rw"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/so.dev.txt"
+        language: "so"
+        #   "sr", "sw", "ta", "te", "tr", "uk", "zh"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/sr.dev.txt"
+        language: "sr"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/sw.dev.txt"
+        language: "sw"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/ta.dev.txt"
+        language: "ta"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/te.dev.txt"
+        language: "te"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/tr.dev.txt"
+        language: "tr"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/uk.dev.txt"
+        language: "uk"
+      - _target_: nemo.collections.nlp.data.token_classification.punct_cap_seg_dataset.TextPunctCapSegDataset
+        text_files: "/home/ubuntu/data47/zh.dev.txt"
+        language: "zh"
+        is_continuous: true
+
+  optim:
+    name: adam
+    lr: 3e-5
+    sched:
+      name: WarmupAnnealing
+      min_lr: 1e-6
+      last_epoch: -1
+      warmup_ratio: null
+      warmup_steps: 8000
+
+trainer:
+  devices: -1
+  num_nodes: 1
+  max_epochs: -1
+  max_steps: 200000
+  accumulate_grad_batches: 1
+  # gradient_clip_val: 2.0
+  precision: bf16
+  accelerator: auto
+  strategy: dp
+  num_sanity_val_steps: 1
+  log_every_n_steps: 300  # Interval of logging.
+  val_check_interval: 2000  # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
+  resume_from_checkpoint: null
+  logger: false
+  enable_checkpointing: false
+  benchmark: false
+
+exp_manager:
+  exp_dir: /home/ubuntu/nemo_exp/
+  name: ${name}
+  create_tensorboard_logger: true
+  create_checkpoint_callback: true
+  # Available metrics are val_{language}/{loss,{punct_pre,punct_post,cap,seg}_{f1,precision,recall}
+  checkpoint_callback_params:
+    monitor: "val_en/loss"
+    mode: "min"
+    save_top_k: 2
+    always_save_nemo: true
+#  # for continuing from a '*-last.ckpt' in an experiment directory
+#  version: 2022-10-03_16-56-33
+#  resume_if_exists: true
+#  resume_ignore_no_checkpoint: false
