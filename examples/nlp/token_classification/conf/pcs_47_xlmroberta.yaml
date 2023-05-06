@@ -19,7 +19,7 @@ model:
   # Accumulate batch metrics every this many steps. Useful for getting more data points into logging.
   batch_metrics_every_n_steps: 5
 
-  max_length: 512
+  max_length: 256
 
   tokenizer:
     tokenizer_name: sentencepiece
@@ -77,24 +77,24 @@ model:
     # Loss weights for punct_post_labels
     punct_post:
       # Weight for each positive example.
-      weight: [ 0.2673, 0.9973, 0.9250, 0.9346, 0.9865, 0.9935, 0.9486, 0.9472, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000 ]
+      weight: [ 0.3, 1.69, 0.56, 0.6, 1.12, 1.84, 1.14, 0.99, 1.31, 2.21, 0.88, 1.9, 1.07, 2.36, 1.12, 1.53, 2.21 ]
       label_smoothing: 0.1
     # Loss weights for punct_pre_labels
     punct_pre:
-      weight: [ 0.0140, 0.9860 ]
+      weight: [ 0.58, 3.54 ]
       label_smoothing: 0.1
     # Loss weights for [lower_case, upper_case]
     cap:
       weight: 1.0  # BCE - only positive class weight
     # Loss weights for [no_stop, full_stop]
     seg:
-      weight: [ 0.1173, 0.8827 ]
+      weight: [ 0.77, 1.43 ]
       label_smoothing: 0.1
   # Target padding value. No need to change.
   pad_value: -100
 
   train_ds:
-    batch_size: 64
+    batch_size: 196
     num_workers: 12
     # A list of datasets will be used to create a ConcatMapDataset.
     sampling_technique: "temperature"
@@ -104,7 +104,7 @@ model:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
       min_lines_per_eg: 1
-      max_lines_per_eg: 32
+      max_lines_per_eg: 20
       max_length: ${model.max_length}
       truncate_max_tokens: 0
       max_input_lines: null
@@ -260,7 +260,7 @@ model:
         is_continuous: true
 
   validation_ds:
-    batch_size: 128
+    batch_size: 256
     num_workers: 8
     # "common" options are analogous to train_ds
     common:
@@ -441,10 +441,10 @@ trainer:
   # gradient_clip_val: 2.0
   precision: bf16
   accelerator: auto
-  strategy: dp
+  strategy: ddp
   num_sanity_val_steps: 1
   log_every_n_steps: 300  # Interval of logging.
-  val_check_interval: 2000  # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
+  val_check_interval: 8000  # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
   resume_from_checkpoint: null
   logger: false
   enable_checkpointing: false
@@ -461,7 +461,7 @@ exp_manager:
     mode: "min"
     save_top_k: 2
     always_save_nemo: true
-#  # for continuing from a '*-last.ckpt' in an experiment directory
-#  version: 2022-10-03_16-56-33
-#  resume_if_exists: true
-#  resume_ignore_no_checkpoint: false
+    #  # for continuing from a '*-last.ckpt' in an experiment directory
+    #  version: 2022-10-03_16-56-33
+    #  resume_if_exists: true
+    #  resume_ignore_no_checkpoint: false
