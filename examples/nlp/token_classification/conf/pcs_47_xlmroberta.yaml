@@ -81,7 +81,7 @@ model:
       label_smoothing: 0.1
     # Loss weights for punct_pre_labels
     punct_pre:
-      weight: [ 0.58, 3.54 ]
+      weight: [ 0.58, 2.2 ]
       label_smoothing: 0.1
     # Loss weights for [lower_case, upper_case]
     cap:
@@ -94,7 +94,8 @@ model:
   pad_value: -100
 
   train_ds:
-    batch_size: 196
+    # With max length 256, batch size 160 fits on A100 40GB
+    batch_size: 160
     num_workers: 12
     # A list of datasets will be used to create a ConcatMapDataset.
     sampling_technique: "temperature"
@@ -104,6 +105,7 @@ model:
       punct_pre_labels: ${model.punct_pre_labels}
       punct_post_labels: ${model.punct_post_labels}
       min_lines_per_eg: 1
+      # In this dataset + tokenizer, most language have an average of 20-30 tokens/line
       max_lines_per_eg: 20
       max_length: ${model.max_length}
       truncate_max_tokens: 0
@@ -424,7 +426,7 @@ model:
 
   optim:
     name: adam
-    lr: 3e-5
+    lr: 1e-5
     sched:
       name: WarmupAnnealing
       min_lr: 1e-6
@@ -438,13 +440,14 @@ trainer:
   max_epochs: -1
   max_steps: 200000
   accumulate_grad_batches: 1
-  # gradient_clip_val: 2.0
+  gradient_clip_val: 2.0
   precision: bf16
   accelerator: auto
   strategy: ddp
   num_sanity_val_steps: 1
   log_every_n_steps: 300  # Interval of logging.
-  val_check_interval: 8000  # Set to 0.25 to check 4 times per epoch, or an int for number of iterations
+  # On A100, ~10k steps/hour
+  val_check_interval: 5000
   resume_from_checkpoint: null
   logger: false
   enable_checkpointing: false
