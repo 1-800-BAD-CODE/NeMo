@@ -77,19 +77,19 @@ model:
     # Loss weights for punct_post_labels
     punct_post:
       # Weight for each positive example.
-      weight: [ 0.3, 1.69, 0.56, 0.6, 1.12, 1.84, 1.14, 0.99, 1.31, 2.21, 0.88, 1.9, 1.07, 2.36, 1.12, 1.53, 2.21 ]
-      label_smoothing: 0.1
+      weight: [ 0.3, 1.69, 0.56, 0.6, 1.0, 1.84, 1.14, 0.99, 1.31, 2.21, 0.88, 1.9, 1.07, 2.36, 1.12, 1.53, 2.21 ]
+      label_smoothing: 0.0
     # Loss weights for punct_pre_labels
     punct_pre:
-      weight: [ 0.58, 2.2 ]
-      label_smoothing: 0.1
+      weight: [ 0.58, 1.0 ]
+      label_smoothing: 0.0
     # Loss weights for [lower_case, upper_case]
     cap:
       weight: 1.0  # BCE - only positive class weight
     # Loss weights for [no_stop, full_stop]
     seg:
-      weight: [ 0.77, 1.43 ]
-      label_smoothing: 0.1
+      weight: [ 0.77, 7.0 ]
+      label_smoothing: 0.0
   # Target padding value. No need to change.
   pad_value: -100
 
