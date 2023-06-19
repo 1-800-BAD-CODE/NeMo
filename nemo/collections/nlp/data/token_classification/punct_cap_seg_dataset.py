@@ -2,7 +2,7 @@ import abc
 import numpy as np
 import re
 import torch
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Set
 
 from nemo.collections.common.tokenizers import TokenizerSpec, SentencePieceTokenizer
 from nemo.core import Dataset, typecheck
@@ -115,6 +115,7 @@ class PunctCapSegDataset(Dataset):
         self,
         punct_pre_labels: List[str],
         punct_post_labels: List[str],
+        predict_merge: bool = False,
         language: str = "unk",
         is_continuous: bool = None,
         tokenizer: Optional[TokenizerSpec] = None,
@@ -127,6 +128,7 @@ class PunctCapSegDataset(Dataset):
         self._target_pad_value = target_pad_value
         self._punct_pre_labels = punct_pre_labels
         self._punct_post_labels = punct_post_labels
+        self._predict_merge = predict_merge
         # If not explicitly set, make the inference.
         self._is_continuous = is_continuous if (is_continuous is not None) else (language in {"zh", "ja", "my"})
         self._rng_seed = rng_seed
@@ -168,7 +170,7 @@ class PunctCapSegDataset(Dataset):
 
     @property
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
-        return {
+        outputs = {
             "input_ids": NeuralType(("B", "T"), ChannelType()),
             "punc_pre_target_ids": NeuralType(("B", "T",), LabelsType()),
             "punc_post_target_ids": NeuralType(("B", "T",), LabelsType()),
@@ -176,6 +178,9 @@ class PunctCapSegDataset(Dataset):
             "seg_target_ids": NeuralType(("B", "T"), LabelsType()),
             "lengths": NeuralType(("B",), LengthsType()),
         }
+        if self._predict_merge:
+            outputs["merge_target_ids"] = NeuralType(("B", "T"), LabelsType())
+        return outputs
 
     def _fold_char_targets(self, tokens: List[str], char_level_targets: List[int]) -> List[List[int]]:
         all_targets: List[List[int]] = []
@@ -196,7 +201,9 @@ class PunctCapSegDataset(Dataset):
             all_targets.append(token_targets)
         return all_targets
 
-    def _char_targets_to_token_targets(self, tokens: List[str], char_targets: List[int], apply_post: bool) -> List[int]:
+    def _char_targets_to_token_targets(
+        self, tokens: List[str], char_targets: List[int], apply_post: bool = True
+    ) -> List[int]:
         all_targets: List[int] = []
         # For each token, make one output list
         char_index = 0
@@ -225,6 +232,8 @@ class PunctCapSegDataset(Dataset):
         punct_post_targets_list = [x[2] for x in batch]
         cap_targets_list = [x[3] for x in batch]
         seg_targets_list = [x[4] for x in batch]
+        if self._predict_merge:
+            merge_targets_list = [x[5] for x in batch]
         lengths = torch.tensor([x.shape[-1] for x in inputs])
         batch_size = len(inputs)  # should be all the same size
 
@@ -240,13 +249,82 @@ class PunctCapSegDataset(Dataset):
             size=[batch_size, lengths.max(), self._max_token_len], fill_value=self._target_pad_value
         )
         seg_targets = torch.full(size=[batch_size, lengths.max()], fill_value=self._target_pad_value)
+        if self._predict_merge:
+            merge_targets = torch.full(size=[batch_size, lengths.max()], fill_value=self._target_pad_value)
         for i in range(batch_size):
             cap_targets[i, : lengths[i], :] = cap_targets_list[i]
             seg_targets[i, : lengths[i]] = seg_targets_list[i]
             punct_post_targets[i, : lengths[i]] = punct_post_targets_list[i]
             punct_pre_targets[i, : lengths[i]] = punct_pre_targets_list[i]
+            if self._predict_merge:
+                merge_targets[i, : lengths[i]] = merge_targets_list[i]  # noqa
 
+        if self._predict_merge:
+            return input_ids, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, lengths, merge_targets
         return input_ids, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, lengths
+
+
+class MergeTargetsGenerator:
+    """Class for a "merge" targets generator.
+
+    Splits acronyms into single-letter tokens such as
+        "FBI" -> "F B I"
+
+        "СИАБ." -> "С И А Б."
+
+        "U.S." -> "U. S."
+
+        "¿U.S." -> "¿U. S."
+
+    The intent of this class is to allow learning to "merge" spelled-out acronyms which are transcribed by an ASR model
+    as individual characters. E.g., a typical ASR model will transcribe "the f b i agent" and in post-processing we want
+    to merge this into "the fbi agent".
+
+    Since it is difficult to deduce which tokens will be transcribed as characters, e.g., "f b i", or as contiguous
+    tokens, e.g., "nato", we randomly choose whether to split an all-uppercase token to learn any potential case.
+
+    Args:
+        post_labels: Post-punctuation tokens, to be ignored in counting character positions
+        pre_labels: Pre-punctuation tokens, analogous to `post_labels`
+        p_split: Split acronyms with this probability.
+    """
+
+    def __init__(self, post_labels: List[str], pre_labels: List[str], p_split: float = 0.5) -> None:
+        self._p_split = p_split
+        self._all_punc: Set[str] = set(post_labels + pre_labels)
+        self._all_punc.discard(NULL_PUNCT_TOKEN)
+        self._all_punc.discard(ACRONYM_TOKEN)
+        # The regex we want for splitting is "<optional_punct_token><character><optional_punct_token>"
+        punc_str = ''.join(re.escape(x) for x in self._all_punc)
+        # Match zero or one punc tokens on each side of a non-punc character.
+        self._split_ptn = re.compile(rf"([{punc_str}]?[^{punc_str}][{punc_str}]?)")
+
+    def generate_targets(self, input_text: str) -> Tuple[str, List[int]]:
+        out_tokens: List[str] = []
+        char_level_targets: List[int] = []
+        for token in input_text.split():
+            # Split on multi-char uppercase tokens: FBI, U.S., etc.
+            if len(token) == 1 or (not token.isupper()) or np.random.rand() <= self._p_split:
+                out_tokens.append(token)
+                for char in token:
+                    if char in self._all_punc:
+                        # Don't count punctuation since it'll be removed before example is generated
+                        continue
+                    char_level_targets.append(0)
+                continue
+            # This is an acronym that we should split
+            subtokens = self._split_ptn.findall(token)
+            out_tokens.extend(subtokens)
+            # "merge[i]" implies "remove the space between chars i and i+1", e.g.,
+            #    "FBI agent" -> (['F', 'B', 'I', 'agent'], [merge, merge, no, no, no, no, no, no])
+            # such that we merge after 'F' and 'B' to recover "FBI agent". The reason for using character-level
+            # targets is to make it easy to align with subword tokens down-stream.
+            for i, subtoken in enumerate(subtokens):
+                target = 1 if i < len(subtokens) - 1 else 0
+                # Each of these tokens should have exactly one non-punc char, as dictated by the regex
+                char_level_targets.append(target)
+        out_text = " ".join(out_tokens)
+        return out_text, char_level_targets
 
 
 class PuncTargetsGenerator(abc.ABC):
@@ -301,19 +379,14 @@ class PuncTargetsGenerator(abc.ABC):
         lang_code = lang_code.lower()
         if len(lang_code) < 2 or len(lang_code) > 3:
             raise ValueError(f"Only 2- or 3-char lang codes recognized. Got '{lang_code}'.")
-        # Catch all the special languages, and default to the English-like punctuation processor.
-        if lang_code in {"es", "ast"}:
-            # Spanish and Asturian use inverted ?!
-            # Basic generator works ok, just be sure there are no "pre" tokens in languages that don't use it.
-            return BasicPuncTargetsGenerator(pre_labels=pre_labels, post_labels=post_labels)
-        elif lang_code in {"zh", "ja", "my"}:
-            # Continuous-script languages. The "basic" class seems to work, so nothing special is implemented yet.
-            return BasicPuncTargetsGenerator(pre_labels=pre_labels, post_labels=post_labels)
-        elif lang_code in {"th"}:
+        if lang_code in {"th"}:
             # Thai -- uses space as punctuation. Don't have a solution, yet.
             raise ValueError(f"Language not supported: {lang_code}")
         else:
             # Assume all other languages use English-like punctuation rules.
+            # Spanish and Asturian use inverted ?! Basic generator works ok, just be sure there are no "pre" tokens in
+            # languages that don't use it.
+            # Continuous-script languages ok, too.
             return BasicPuncTargetsGenerator(pre_labels=pre_labels, post_labels=post_labels)
 
 
@@ -429,6 +502,8 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         target_pad_value: Padding value used in the targets. Should be the ignore_idx of your loss function.
         rng_seed: Seed for the PRNG. For training, keep at None to prevent the data loader works from using the same
             extra indices each step.
+        predict_merge: Whether to make "merge" predictions, i.e., whether to remove the whitespace between token `i` and
+            token `i+1`.
     """
 
     def __init__(
@@ -448,6 +523,7 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         target_pad_value: int = -100,
         rng_seed: Optional[int] = None,
         max_input_lines: Optional[int] = None,
+        predict_merge: bool = False,
     ):
         super().__init__(
             language=language,
@@ -457,6 +533,7 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
             target_pad_value=target_pad_value,
             rng_seed=rng_seed,
             is_continuous=is_continuous,
+            predict_merge=predict_merge,
         )
         self._text_files = [text_files] if isinstance(text_files, str) else text_files
         self._max_length = max_length
@@ -473,6 +550,13 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         )
 
         self._cap_targets_gen: CapTargetsGenerator = CapTargetsGenerator()
+
+        self._predict_merge = predict_merge
+        self._merge_targets_gen: Optional[MergeTargetsGenerator] = None
+        if predict_merge:
+            self._merge_targets_gen = MergeTargetsGenerator(
+                post_labels=self._punct_post_labels, pre_labels=self._punct_pre_labels
+            )
 
     def _load_data(self, text_files, max_input_lines: Optional[int] = None) -> List[str]:
         data: List[str] = []
@@ -494,7 +578,7 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         pad = self._target_pad_value
         pad_list = [[pad] * self._max_token_len]
 
-        # Randomly choose how many additional lines to use. During testing we may fix the values
+        # Randomly choose how many additional lines to use. During testing, we may fix the values
         if self._min_lines_per_eg == self._max_lines_per_eg:
             num_extra_lines = self._min_lines_per_eg - 1
         else:
@@ -504,6 +588,15 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         indices_to_use = [idx] + extra_indices
         punctuated_texts: List[str] = [self._data[x] for x in indices_to_use]
 
+        # Split acronyms in text; get character-level targets
+        merge_target_indices: List[int] = []
+        if self._predict_merge:
+            for i, text in enumerate(punctuated_texts):
+                text, targets = self._merge_targets_gen.generate_targets(text)
+                punctuated_texts[i] = text
+                merge_target_indices.extend(targets)
+
+        # Strip punctuation and get character-level punctuation targets
         unpunctuated_texts = []
         punct_pre_target_indices = []
         punct_post_target_indices = []
@@ -557,6 +650,12 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
             seg_targets = seg_targets[: self._max_length - 2]
             cap_targets = cap_targets[: self._max_length - 2]
             input_tokens = input_tokens[: self._max_length - 2]
+        if self._predict_merge:
+            merge_targets = self._char_targets_to_token_targets(input_tokens, merge_target_indices)
+            if len(merge_targets) + 2 > self._max_length:
+                merge_targets = merge_targets[: self._max_length - 2]
+            merge_targets = [pad] + merge_targets + [pad]
+
         # # Targeting final token as sentence boundary is not useful. Ignore it.
         # seg_targets[-1] = self._target_pad_value
         # Add BOS/EOS and target padding for those tokens.
@@ -579,10 +678,21 @@ class TextPunctCapSegDataset(PunctCapSegDataset):
         cap_targets_tensor = torch.tensor(cap_targets, dtype=torch.long)
         seg_targets_tensor = torch.tensor(seg_targets, dtype=torch.long)
         input_ids = torch.tensor(input_ids)
-        return (
-            input_ids,
-            punct_pre_targets_tensor,
-            punct_post_targets_tensor,
-            cap_targets_tensor,
-            seg_targets_tensor,
-        )
+        if self._predict_merge:
+            merge_targets_tensor = torch.tensor(merge_targets, dtype=torch.long)
+            return (
+                input_ids,
+                punct_pre_targets_tensor,
+                punct_post_targets_tensor,
+                cap_targets_tensor,
+                seg_targets_tensor,
+                merge_targets_tensor,
+            )
+        else:
+            return (
+                input_ids,
+                punct_pre_targets_tensor,
+                punct_post_targets_tensor,
+                cap_targets_tensor,
+                seg_targets_tensor,
+            )

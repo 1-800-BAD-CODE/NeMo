@@ -24,6 +24,8 @@ from nemo.utils import logging
 
 class PunctCapSegModel(NLPModel):
     def __init__(self, cfg: DictConfig, trainer: Trainer = None) -> None:
+        # Whether to predict "merge" tokens, which affects loss and data loaders, TODO no code before super init
+        self._predict_merge = cfg.decoder.get("predict_merge", False)
         super().__init__(cfg=cfg, trainer=trainer)
         # During training, print metrics for these languages only
         self._log_val_metrics_for = set(cfg.get("log_val_metrics_for", []))
@@ -80,8 +82,19 @@ class PunctCapSegModel(NLPModel):
         self._cap_loss: nn.BCEWithLogitsLoss = nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor(cfg.loss.cap["weight"]) if "weight" in cfg.loss.cap else None
         )
-        # Weights can be specified in punct{-pre,-post}, cap, seg order.
-        self._agg_loss = AggregatorLoss(num_inputs=4, weights=cfg.loss.get("agg_loss_weights"))
+
+        self._merge_loss: Optional[CrossEntropyLoss] = None
+        if self._predict_merge:
+            self._merge_loss = CrossEntropyLoss(
+                weight=cfg.loss.merge.get("weight"),
+                ignore_index=self._ignore_idx,
+                logits_ndim=3,
+                label_smoothing=cfg.loss.merge.get("label_smoothing", 0.0),
+            )
+
+        # Weights can be specified in punct{-pre,-post}, cap, seg, [merge] order.
+        num_loss = 5 if self._predict_merge else 4
+        self._agg_loss = AggregatorLoss(num_inputs=num_loss, weights=cfg.loss.get("agg_loss_weights"))
 
         with open_dict(self._cfg.decoder):
             self._cfg.decoder.punct_num_classes_post = len(self._punct_post_labels)
@@ -159,6 +172,10 @@ class PunctCapSegModel(NLPModel):
                     ),
                 }
             )
+            if self._predict_merge:
+                metrics["merge_report"] = ClassificationReport(
+                    num_classes=2, label_ids={"NOMERGE": 0, "MERGE": 1}, mode="macro", dist_sync_on_step=False
+                )
             if self._using_pre_punct:
                 metrics["punct_pre_report"] = ClassificationReport(
                     num_classes=len(self._punct_pre_labels),
@@ -179,6 +196,7 @@ class PunctCapSegModel(NLPModel):
         for ds_config in cfg.datasets:
             # Add all common variables, if not set already
             with open_dict(ds_config):
+                ds_config.predict_merge = self._predict_merge
                 for k, v in cfg.get("common", {}).items():
                     if k not in ds_config:
                         ds_config[k] = v
@@ -208,6 +226,7 @@ class PunctCapSegModel(NLPModel):
             cfg.dataset.punct_pre_labels = self._cfg.punct_pre_labels
             cfg.dataset.punct_post_labels = self._cfg.punct_post_labels
             cfg.dataset.max_length = self._max_length
+            cfg.dataset.predict_merge = self._predict_merge
         # _target_ should instantiate a PunctCapSegDataset
         dataset: PunctCapSegDataset = instantiate(cfg.dataset)
         if not isinstance(dataset, PunctCapSegDataset):
@@ -235,6 +254,7 @@ class PunctCapSegModel(NLPModel):
         for ds_config in cfg.datasets:
             # Add all common variables, if not set already
             with open_dict(ds_config):
+                ds_config.predict_merge = self._predict_merge
                 for k, v in cfg.get("common", {}).items():
                     if k not in ds_config:
                         ds_config[k] = v
@@ -267,8 +287,8 @@ class PunctCapSegModel(NLPModel):
         return dataloader
 
     def _run_step(self, batch: Tuple, testing: bool = False):
-        # All inputs and targets are shape [B, T]
-        (inputs, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _,) = batch
+        # All inputs and targets are shape [B, T]  # TODO assuming merge targets?
+        (inputs, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _, merge_targets) = batch
         mask = inputs.ne(self.tokenizer.pad_id)
         # Encoded output is [B, T, D]
         encoded = self.bert_model(input_ids=inputs, attention_mask=mask, token_type_ids=None)
@@ -277,12 +297,12 @@ class PunctCapSegModel(NLPModel):
             encoded = encoded[0]
 
         # Make a binary mask from the post punc targets
-        punc_mask = punct_post_targets.ne(self._cfg.get("ignore_idx", -100))
-        punct_targets_for_decoder = punct_post_targets.masked_fill(~punc_mask, self._null_punct_post_index)
+        punc_mask = punct_post_targets.eq(self._cfg.get("ignore_idx", -100))
+        punct_targets_for_decoder = punct_post_targets.masked_fill(punc_mask, self._null_punct_post_index)
         # In training mode, always feed ground truth predictions to the heads.
         # For val, it's useful to use reference to not penalize the cap/seg heads for bad punctuation predictions when
         # selecting the best model.
-        punct_logits_pre, punct_logits_post, cap_logits, seg_logits = self._decoder(
+        punct_logits_pre, punct_logits_post, cap_logits, seg_logits, merge_logits = self._decoder(
             encoded=encoded,
             mask=mask,
             punc_targets=None if testing else punct_targets_for_decoder,
@@ -300,26 +320,31 @@ class PunctCapSegModel(NLPModel):
         else:
             # Dimensionless 0.0 like cap_logits
             cap_loss = cap_logits.new_zeros(1).squeeze()
+        if self._predict_merge:
+            merge_loss = self._merge_loss(logits=merge_logits, labels=merge_targets)
+        loss = self._agg_loss.forward(
+            loss_1=punct_pre_loss, loss_2=punct_post_loss, loss_3=cap_loss, loss_4=seg_loss, loss_5=merge_loss  # noqa
+        )
 
-        loss = self._agg_loss.forward(loss_1=punct_pre_loss, loss_2=punct_post_loss, loss_3=cap_loss, loss_4=seg_loss,)
-
-        return loss, punct_logits_pre, punct_logits_post, cap_logits, seg_logits
+        return loss, punct_logits_pre, punct_logits_post, cap_logits, seg_logits, merge_logits
 
     def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int):
-        (loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits,) = self._run_step(batch)
+        (loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits, merge_logits) = self._run_step(batch)
         lr = self._optimizer.param_groups[0]["lr"]
         self.log("lr", lr, prog_bar=True)
         self.log("train_loss", loss)
 
         # Maybe accumulate batch metrics
         if batch_idx % self._cfg.get("batch_metrics_every_n_steps", 10) == 0:
-            _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
+            _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _, merge_targets = batch
             punct_pre_preds = punct_pre_logits.argmax(dim=-1)
             punct_post_preds = punct_post_logits.argmax(dim=-1)
             cap_mask = cap_targets.ne(self._ignore_idx)
             cap_preds = cap_logits[cap_mask].sigmoid().gt(0.5)
             seg_mask = seg_targets.ne(self._ignore_idx)
             seg_preds = seg_logits.argmax(dim=-1)
+            merge_mask = merge_targets.ne(self._ignore_idx)
+            merge_preds = merge_logits.argmax(dim=-1)
 
             punct_pre_mask = punct_pre_targets.ne(self._ignore_idx)
             punct_post_mask = punct_post_targets.ne(self._ignore_idx)
@@ -329,11 +354,12 @@ class PunctCapSegModel(NLPModel):
             )
             self._train_metrics["cap_report"](cap_preds, cap_targets[cap_mask])
             self._train_metrics["seg_report"](seg_preds[seg_mask], seg_targets[seg_mask])
+            self._train_metrics["merge_report"](merge_preds[merge_mask], merge_targets[merge_mask])
 
         # Maybe log and reset batch metrics
         if batch_idx > 0 and batch_idx % self._trainer.log_every_n_steps == 0:
             # todo don't need keys iterate over all metrics (currently, loss is in the dict)
-            analytics = ["punct_pre", "punct_post", "cap", "seg"]
+            analytics = ["punct_pre", "punct_post", "cap", "seg", "merge"]
             for analytic in analytics:
                 metric = self._train_metrics[f"{analytic}_report"]
                 precision, recall, f1, report = metric.compute()
@@ -354,8 +380,8 @@ class PunctCapSegModel(NLPModel):
         return loss
 
     def _eval_step(self, batch: Tuple, dataloader_idx: int = 0) -> None:
-        (loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits,) = self._run_step(batch)
-        _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
+        (loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits, merge_logits) = self._run_step(batch)
+        _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _, merge_targets = batch
         # All log probs are [B, T, D]
         punct_pre_preds = punct_pre_logits.argmax(dim=-1)
         punct_post_preds = punct_post_logits.argmax(dim=-1)
@@ -363,39 +389,48 @@ class PunctCapSegModel(NLPModel):
         cap_preds = cap_logits[cap_mask].sigmoid().gt(0.5)
         seg_mask = seg_targets.ne(self._ignore_idx)
         seg_preds = seg_logits.argmax(dim=-1)
+        merge_mask = merge_targets.ne(self._ignore_idx)
+        merge_preds = merge_logits.argmax(dim=-1)
 
         metrics: nn.ModuleDict = self._dev_metrics[dataloader_idx]
         punct_pre_mask = punct_pre_targets.ne(self._ignore_idx)
         punct_post_mask = punct_post_targets.ne(self._ignore_idx)
-        num_targets = punct_pre_mask.sum() + punct_post_mask.sum() + cap_mask.sum() + seg_mask.sum()
+        num_targets = punct_pre_mask.sum() + punct_post_mask.sum() + cap_mask.sum() + seg_mask.sum() + merge_mask.sum()
         metrics["punct_pre_report"](punct_pre_preds[punct_pre_mask], punct_pre_targets[punct_pre_mask])
         metrics["punct_post_report"](punct_post_preds[punct_post_mask], punct_post_targets[punct_post_mask])
         metrics["cap_report"](cap_preds, cap_targets[cap_mask])
         metrics["seg_report"](seg_preds[seg_mask], seg_targets[seg_mask])
+        metrics["merge_report"](merge_preds[merge_mask], merge_targets[merge_mask])
         metrics["loss"](loss=loss, num_measurements=num_targets)
 
     def _test_step(self, batch: Tuple, dataloader_idx: int = 0) -> None:
-        (loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits,) = self._run_step(batch, testing=False)
-        _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _ = batch
+        (loss, punct_pre_logits, punct_post_logits, cap_logits, seg_logits, merge_logits) = self._run_step(
+            batch, testing=False
+        )
+        _, punct_pre_targets, punct_post_targets, cap_targets, seg_targets, _, merge_targets = batch
         # Prepare masks
         cap_mask = cap_targets.ne(self._ignore_idx)
         seg_mask = seg_targets.ne(self._ignore_idx)
+        merge_mask = merge_targets.ne(self._ignore_idx)
         punct_pre_mask = punct_pre_targets.ne(self._ignore_idx)
         punct_post_mask = punct_post_targets.ne(self._ignore_idx)
         # Get all probs. All log probs are [B, T, D]
         punct_pre_probs = punct_pre_logits.softmax(dim=-1)
         punct_post_probs = punct_post_logits.softmax(dim=-1)
         seg_probs = seg_logits.softmax(dim=-1)[..., 1]
+        merge_probs = merge_logits.softmax(dim=-1)[..., 1]
         cap_probs = cap_logits[cap_mask].sigmoid()
 
         punct_pre_preds = punct_pre_probs.argmax(dim=-1)
         punct_post_preds = punct_post_probs.argmax(dim=-1)
         seg_preds = seg_probs.ge(0.5)
+        merge_preds = merge_probs.ge(0.5)
         cap_preds = cap_probs.ge(0.5)
         self._test_metrics["punct_pre_report"](punct_pre_preds[punct_pre_mask], punct_pre_targets[punct_pre_mask])
         self._test_metrics["punct_post_report"](punct_post_preds[punct_post_mask], punct_post_targets[punct_post_mask])
         self._test_metrics["cap_report"](cap_preds, cap_targets[cap_mask])
         self._test_metrics["seg_report"](seg_preds[seg_mask], seg_targets[seg_mask])
+        self._test_metrics["merge_report"](merge_preds[merge_mask], merge_targets[merge_mask])
 
     def _get_language_for_dl_idx(self, idx: int) -> str:
         ds: PunctCapSegDataset = self._validation_dl[idx].dataset
@@ -414,7 +449,7 @@ class PunctCapSegModel(NLPModel):
         self.log(f"val_{language}/loss", loss)
 
         # Compute, reset, and log the precision/recall/f1 for punct/cap/seg for this language
-        analytics = ["punct_pre", "punct_post", "cap", "seg"]
+        analytics = ["punct_pre", "punct_post", "cap", "seg", "merge"]
         for analytic in analytics:
             metric = metric_dict[f"{analytic}_report"]
             precision, recall, f1, report = metric.compute()
@@ -440,7 +475,7 @@ class PunctCapSegModel(NLPModel):
 
     def test_epoch_end(self, outputs) -> None:
         # Compute, reset, and log the precision/recall/f1 for punct/cap/seg for this threshold
-        analytics = ["punct_pre", "punct_post", "cap", "seg"]
+        analytics = ["punct_pre", "punct_post", "cap", "seg", "merge"]
         for analytic in analytics:
             precision, recall, f1, report = self._test_metrics[f"{analytic}_report"].compute()
             self._test_metrics[f"{analytic}_report"].reset()
@@ -491,6 +526,8 @@ class PunctCapSegModel(NLPModel):
             "cap_preds": NeuralType(("B", "T", "D"), LogitsType()),  # D == max_subword_length
             "seg_preds": NeuralType(("B", "T"), LogitsType()),  # C == 2
         }
+        if self._predict_merge:
+            outputs["merge_preds"] = (NeuralType(("B", "T"), LogitsType()),)  # C == 2
         return outputs
 
     def input_example(
@@ -511,13 +548,13 @@ class PunctCapSegModel(NLPModel):
         # Some LMs will return a tuple
         if isinstance(encoded, tuple):
             encoded = encoded[0]
-
+        # TODO add merge logic
         pre_logits, post_logits, cap_logits, seg_logits = self._decoder(encoded=encoded, mask=seq_mask)
 
         # [B, T, max_token_len]
         cap_preds = cap_logits.sigmoid().gt(0.5)
         # [B, T]
-        seg_preds = seg_logits.softmax(dim=-1)[..., 1].gt(0.5)
+        seg_preds = seg_logits.softmax(dim=-1)[..., 1].gt(0.05)  # TODO tmp change need to expose
         _, pre_preds = pre_logits.max(dim=-1)
         _, post_preds = post_logits.max(dim=-1)
         return pre_preds, post_preds, cap_preds, seg_preds
@@ -626,11 +663,13 @@ class PunctCapSegModel(NLPModel):
             if isinstance(encoded, tuple):
                 encoded = encoded[0]
 
-            pre_logits, post_logits, cap_logits, seg_logits = self._decoder(encoded=encoded, mask=mask)
+            pre_logits, post_logits, cap_logits, seg_logits, merge_logits = self._decoder(encoded=encoded, mask=mask)
             # [B, T, max_token_len]
             cap_probs = cap_logits.sigmoid()
             # [B, T, 2]
             seg_probs = seg_logits.softmax(dim=-1)[..., 1]
+            # [B, T, 2]
+            merge_probs = merge_logits.softmax(dim=-1)[..., 1]
             # Select the highest-scoring value. Set null index to very small value (in case it was 1.0)
             pre_probs = pre_logits.softmax(dim=-1)
             post_probs = post_logits.softmax(dim=-1)
@@ -641,7 +680,8 @@ class PunctCapSegModel(NLPModel):
                 ids = input_ids[batch_idx, 1 : length - 1].tolist()
                 tokens = self.tokenizer.ids_to_tokens(ids)
                 cap_preds: List[List[int]] = cap_probs[batch_idx, 1 : length - 1].gt(0.5).tolist()
-                seg_preds: List[int] = seg_probs[batch_idx, 1 : length - 1].gt(0.5).tolist()
+                seg_preds: List[int] = seg_probs[batch_idx, 1 : length - 1].gt(0.05).tolist()
+                merge_preds: List[int] = merge_probs[batch_idx, 1 : length - 1].gt(0.5).tolist()
                 pre_preds: List[int] = pre_probs[batch_idx, 1 : length - 1].argmax(dim=-1).tolist()
                 post_preds: List[int] = post_probs[batch_idx, 1 : length - 1].argmax(dim=-1).tolist()
 
@@ -650,6 +690,7 @@ class PunctCapSegModel(NLPModel):
                 post_tokens = self._get_char_punct_preds(tokens=tokens, token_preds=post_preds, post=True)
                 pre_tokens = self._get_char_punct_preds(tokens=tokens, token_preds=pre_preds, post=False)
                 break_points = self._get_char_seg_preds(tokens=tokens, token_preds=seg_preds)
+                merge_points = self._get_char_seg_preds(tokens=tokens, token_preds=merge_preds)
 
                 segmented_texts: List[str] = []
                 output_chars: List[str] = []
@@ -657,6 +698,10 @@ class PunctCapSegModel(NLPModel):
                 non_whitespace_index = 0
                 for input_char in list(input_text):
                     if input_char == " ":
+                        # Skip this space if the previous subtoken should "merge" with the next
+                        if merge_points and merge_points[0] == non_whitespace_index:
+                            del merge_points[0]
+                            continue
                         output_chars.append(" ")
                         continue
                     # Maybe add punctuation before this char

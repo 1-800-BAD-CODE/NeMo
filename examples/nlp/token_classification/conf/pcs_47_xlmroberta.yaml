@@ -55,6 +55,7 @@ model:
     seg_head_intermediate_dim: 128
     punct_head_intermediate_dim: 256
     emb_dim: 4
+    predict_merge: true
 
   null_punct_token: "<NULL>"
   # Punctuation tokens that are predicted before each subword. Add "¡" here if using it.
@@ -88,7 +89,10 @@ model:
       weight: 1.0  # BCE - only positive class weight
     # Loss weights for [no_stop, full_stop]
     seg:
-      weight: [ 0.77, 7.0 ]
+      weight: [ 0.5, 5.0 ]
+      label_smoothing: 0.0
+    merge:
+      weight: [ 0.5, 5.0 ]
       label_smoothing: 0.0
   # Target padding value. No need to change.
   pad_value: -100
@@ -438,9 +442,9 @@ trainer:
   devices: -1
   num_nodes: 1
   max_epochs: -1
-  max_steps: 200000
+  max_steps: 100000
   accumulate_grad_batches: 1
-  gradient_clip_val: 2.0
+  #  gradient_clip_val: 2.0
   precision: bf16
   accelerator: auto
   strategy: ddp
@@ -460,6 +464,7 @@ exp_manager:
   create_checkpoint_callback: true
   # Available metrics are val_{language}/{loss,{punct_pre,punct_post,cap,seg}_{f1,precision,recall}
   checkpoint_callback_params:
+    # Loss is least noisy
     monitor: "val_en/loss"
     mode: "min"
     save_top_k: 2

@@ -79,8 +79,9 @@ class ClassificationHead(NeuralModule):
 
 
 class PunctCapSegDecoder(NeuralModule):
-    def __init__(self,):
+    def __init__(self, predict_merge: bool = False):
         super().__init__()
+        self._predict_merge = predict_merge
 
     @property
     def input_types(self) -> Optional[Dict[str, NeuralType]]:
@@ -99,12 +100,15 @@ class PunctCapSegDecoder(NeuralModule):
 
     @property
     def output_types(self) -> Optional[Dict[str, NeuralType]]:
-        return {
+        outputs = {
             "punct_pre_logits": NeuralType(("B", "T", "C"), LogitsType()),
             "punct_post_logits": NeuralType(("B", "T", "C"), LogitsType()),
             "cap_logits": NeuralType(("B", "T", "D"), LogitsType()),  # D == max_subword_length
             "seg_logits": NeuralType(("B", "T", "C"), LogitsType()),  # C == 2
         }
+        if self._predict_merge:
+            outputs["merge_logits"] = NeuralType(("B", "T", "C"), LogitsType())  # C == 2
+        return outputs
 
     @abc.abstractmethod
     def forward(
@@ -352,19 +356,31 @@ class ConditionedPCSDecoder(PunctCapSegDecoder):
         punct_head_n_layers: int = 2,
         cap_head_n_layers: int = 2,
         seg_head_n_layers: int = 2,
+        merge_head_n_layers: int = 2,
         punct_head_intermediate_dim: int = 128,
         cap_head_intermediate_dim: int = 128,
         seg_head_intermediate_dim: int = 128,
+        merge_head_intermediate_dim: int = 128,
         punct_head_dropout: float = 0.1,
         cap_head_dropout: float = 0.1,
         seg_head_dropout: float = 0.1,
+        merge_head_dropout: float = 0.1,
+        seg_input_projection_dim: Optional[int] = None,
+        merge_input_projection_dim: Optional[int] = None,
+        predict_merge: bool = False,
     ):
-        super().__init__()
+        super().__init__(predict_merge=predict_merge)
         self._max_subword_len = max_subword_length
         self._num_post_punct_classes = punct_num_classes_post
         self._punct_emb = nn.Embedding(num_embeddings=punct_num_classes_post, embedding_dim=emb_dim)
         # Initialize the embeddings to the same scale as the attn module and heads
         nn.init.normal_(self._punct_emb.weight, mean=0.0, std=0.02)
+        # Maybe init the down-projection for SBD head
+        self._pre_sbd_projection: Optional[nn.Linear] = None
+        if seg_input_projection_dim is not None:
+            # Project encoding to same dim as embeddings for similar weighting
+            self._pre_sbd_projection = nn.Linear(encoder_dim, seg_input_projection_dim)
+            nn.init.normal_(self._pre_sbd_projection.weight, mean=0.0, std=0.02)
 
         self._punct_head_post: ClassificationHead = ClassificationHead(
             encoded_dim=encoder_dim,
@@ -383,7 +399,7 @@ class ConditionedPCSDecoder(PunctCapSegDecoder):
             num_classes=punct_num_classes_pre,
         )
         self._seg_head: ClassificationHead = ClassificationHead(
-            encoded_dim=encoder_dim + emb_dim,
+            encoded_dim=emb_dim + (encoder_dim if seg_input_projection_dim is None else seg_input_projection_dim),
             num_layers=seg_head_n_layers,
             dropout=seg_head_dropout,
             activation="relu",
@@ -399,6 +415,24 @@ class ConditionedPCSDecoder(PunctCapSegDecoder):
             intermediate_dim=cap_head_intermediate_dim,
             num_classes=max_subword_length,
         )
+
+        self._merge_head: Optional[ClassificationHead] = None
+        self._pre_merge_projection: Optional[nn.Linear] = None
+        if self._predict_merge:
+            if merge_input_projection_dim is not None:
+                self._pre_merge_projection = nn.Linear(encoder_dim, merge_input_projection_dim)
+                nn.init.normal_(self._pre_merge_projection.weight, mean=0.0, std=0.02)
+            self._merge_head: ClassificationHead = ClassificationHead(
+                # encoded + punct_emb + seg_pred
+                encoded_dim=emb_dim
+                + 1
+                + (encoder_dim if merge_input_projection_dim is None else merge_input_projection_dim),
+                num_layers=merge_head_n_layers,
+                dropout=merge_head_dropout,
+                activation="relu",
+                intermediate_dim=merge_head_intermediate_dim,
+                num_classes=2,
+            )
 
     @typecheck()
     def forward(
@@ -423,10 +457,14 @@ class ConditionedPCSDecoder(PunctCapSegDecoder):
         # [B, T, emb_dim]
         embs = self._punct_emb(punc_targets)
         # Concatenate the punctuation embeddings to the input
-        # [B, T, D + emb_dim]
-        encoded_with_embs = torch.cat((encoded, embs), dim=-1)
+        # [B, T, D + emb_dim] or [B, T, 2 * emb_dim]
+        if self._pre_sbd_projection is None:
+            sbd_head_input = torch.cat((encoded, embs), dim=-1)
+        else:
+            projected = self._pre_sbd_projection(encoded)
+            sbd_head_input = torch.cat((projected, embs), dim=-1)
         # [B, T, 2]
-        seg_logits = self._seg_head(encoded=encoded_with_embs)
+        seg_logits = self._seg_head(encoded=sbd_head_input)
 
         # In inference mode, generate the sentence boundary predictions
         if seg_targets is None:
@@ -434,16 +472,26 @@ class ConditionedPCSDecoder(PunctCapSegDecoder):
         # For consistency, set the first token slot (BOS) to 1 (effectively a sentence boundary)
         seg_targets[:, 0] = 1
         # Shift the targets right by one, to indicate which tokens are the beginning of a sentence rather than the end.
-        seg_targets = torch.nn.functional.pad(seg_targets, pad=[1, 0])
+        seg_targets_shifted = torch.nn.functional.pad(seg_targets, pad=[1, 0])
         # Trim the right because we padded left
-        seg_targets = seg_targets[:, :-1]
+        seg_targets_shifted = seg_targets_shifted[:, :-1]
         # Note that the seg targets contain -100 (ignore_idx) in BOS/EOS positions, but BOS is overwritten and EOS
         # is shifted right, into the padding region.
         # [B, T] -> [B, T, 1]
-        seg_targets = seg_targets.unsqueeze(-1)
+        seg_targets_shifted = seg_targets_shifted.unsqueeze(-1)
         # Concatenate the shifted sentence boundary predictions for the truecase head
-        cap_head_input = torch.cat((encoded, seg_targets), dim=-1)
+        cap_head_input = torch.cat((encoded, seg_targets_shifted), dim=-1)
         # [B, T, max_subword_len]
         cap_logits = self._cap_head(encoded=cap_head_input)
+
+        if self._predict_merge:
+            if self._pre_merge_projection is not None:
+                encoded = self._pre_merge_projection(encoded)
+            seg_targets = seg_targets.unsqueeze(-1)
+            # Use the un-shifted SBD targets to indicate whether token N is sentence boundary
+            merge_inputs = torch.cat((encoded, embs, seg_targets), dim=-1)
+            # [B, T, 2]
+            merge_logits = self._merge_head(encoded=merge_inputs)
+            return punct_logits_pre, punct_logits_post, cap_logits, seg_logits, merge_logits
 
         return punct_logits_pre, punct_logits_post, cap_logits, seg_logits
