@@ -1,0 +1,627 @@
+output_dir: /Users/shane/corpora/wmt/data47/
+punct_pre_labels: ["¿",]
+punct_post_labels: [
+    ".", ",", "?",
+    "？", "，", "。", # Chinese, no enum comma
+    "、", "・",  # Japanese comma, middle dot
+    "।", # Hindi
+    "؟", "،",  # Arabic
+    ";",  # Greek question mark
+    "።", "፣", "፧"  # Amharic full stop, comma, question
+]
+max_lines_per_input_file: 1000000
+max_lines_total: 1005000
+dev_set_num_lines: 2000
+test_set_num_lines: 3000
+min_chars_per_line: 2  # Need at least 2 to have char + punctuation
+max_chars_per_line: 40
+min_words_per_line: 1
+max_words_per_line: 25
+
+# Low-resource (after processing)
+#  703992 processed/ky.train.txt
+#  681514 processed/mr.train.txt
+#  539754 processed/so.train.txt
+#  507236 processed/sw.train.txt
+#  409333 processed/mk.train.txt
+#  302980 processed/pa.train.txt
+#  288494 processed/ps.train.txt
+#  273586 processed/af.train.txt
+#  186854 processed/am.train.txt
+#  175027 processed/rw.train.txt
+
+datasets:
+  # af am ar bg bn de el en es et
+  - language: "af"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2022.af.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2021.af.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.af.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "am"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2022.am.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2021.am.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.am.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+        default_full_stop: "።"
+      - _target_: __main__.AmharicTextCleaner
+  - language: "ar"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.ar.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.ArabicTextCleaner
+  - language: "bg"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.bg.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "bn"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.bn.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.HindiTextCleaner
+  - language: "de"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.de.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "el"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.el.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels: ${punct_pre_labels}
+        remove_semicolon: false
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.GreekTextCleaner
+  - language: "en"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.en.shuffled.4M.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2012.en.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "es"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2018.es.questions"
+      - "/Users/shane/corpora/wmt/data/news.2012.es.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2021.es.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.SpanishPunctNormalizer
+        pre_punct_tokens: ${punct_pre_labels}
+        post_punct_tokens: ${punct_post_labels}
+  - language: "et"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.et.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.et.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  # fa fi fr gu hi hr hu id is it
+  - language: "fa"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.fa.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.ArabicTextCleaner
+  - language: "fi"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.fi.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "fr"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2012.fr.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2021.fr.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "gu"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.gu.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.gu.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.GujaratiTextCleaner
+  - language: "hi"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.hi.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.HindiTextCleaner
+  - language: "hr"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.hr.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "hu"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.hu.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "id"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.id.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.id.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "is"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.is.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.is.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "it"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2012.it.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2021.it.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  # ja kk kn ko ky lt lv mk ml mr
+  - language: "ja"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2020.ja.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2021.ja.shuffled.4M.deduped"
+    continuous_script: true
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.JapaneseTextCleaner
+  - language: "kk"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.kk.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.kk.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "kn"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.kn.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.kn.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "ko"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.ko.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "ky"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.ky.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.ky.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2019.ky.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "lt"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.lt.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.lt.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "lv"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.lv.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.lv.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "mk"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.mk.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.mk.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2019.mk.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "ml"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.ml.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.ml.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "mr"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.mr.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.mr.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2019.mr.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  # nl or pa pl ps pt ro ro rw so
+  - language: "nl"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.nl.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.nl.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2019.nl.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "or"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.or.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.or.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2019.or.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.HindiTextCleaner
+  - language: "pa"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.pa.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.pa.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2019.pa.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2018.pa.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.HindiTextCleaner
+  - language: "pl"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.pl.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "ps"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.ps.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.ps.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2019.ps.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2018.ps.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.ArabicTextCleaner
+  - language: "pt"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2011.pt.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2012.pt.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2013.pt.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2014.pt.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2015.pt.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2021.pt.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.pt.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "ro"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2015.ro.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2016.ro.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2021.ro.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "ru"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.ru.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "rw"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.rw.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.rw.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "so"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.so.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.so.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  # sr sw ta te tr uk zh
+  - language: "sr"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.sr.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "sw"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.sw.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.sw.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "ta"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.ta.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.ta.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "te"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.te.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.te.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "tr"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.tr.shuffled.4M.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "uk"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.uk.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2020.uk.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2019.uk.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2018.uk.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2016.uk.shuffled.deduped"
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+  - language: "zh"
+    text_files:
+      - "/Users/shane/corpora/wmt/data/news.2021.zh.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2019.zh.shuffled.deduped"
+      - "/Users/shane/corpora/wmt/data/news.2018.zh.shuffled.deduped"
+    continuous_script: true
+    text_cleaners:
+      - _target_: __main__.SentencePieceNormalizer
+        sp_model_path: /Users/shane/Downloads/xlmroberta_converted.model
+      - _target_: __main__.CharFilter
+        post_punct_labels: ${punct_post_labels}
+        pre_punct_labels:  ${punct_pre_labels}
+      - _target_: __main__.StandardPunctNormalizer
+        punct_tokens: ${punct_post_labels}
+      - _target_: __main__.ChineseTextCleaner
+        s2t_percent: 0.5
